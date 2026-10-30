@@ -1,0 +1,18 @@
+# CF Best 局域网服务。启动：docker compose up -d，然后在浏览器打开 http://<NAS 的 IP>:27208
+services:
+  cf-best:
+    image: ghcr.io/wintopic/cf-best:latest
+    # 想从源码构建时，把上一行换成：build: .
+    container_name: cf-best
+    restart: unless-stopped
+    ports:
+      - "27208:27208"
+    volumes:
+      # 设置、段池、结果与日志都保存在这里，升级或重建容器不会丢失。
+      - ./data:/data
+    environment:
+      TZ: Asia/Shanghai
+      # 网页访问密码，建议设置；订阅地址自带令牌，不受密码影响。
+      # CFBEST_PASSWORD: change-me
+      # 用域名访问网页且没有设密码时，把域名加到这里（逗号分隔）。
+      # CFBEST_ALLOWED_HOSTS: nas.example.com

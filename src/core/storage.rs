@@ -16,6 +16,9 @@ use crate::core::model::{
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 /// 日志是否同时写到控制台；无窗口模式用 `--quiet` 关掉。
 static CONSOLE_LOG: AtomicBool = AtomicBool::new(true);
+/// 日志的额外去处：局域网服务把每行日志转给网页（参数为时间戳与内容）。
+type LogSink = Box<dyn Fn(&str, &str) + Send + Sync>;
+static LOG_SINK: OnceLock<LogSink> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -30,15 +33,20 @@ pub struct AppPaths {
 }
 
 impl AppPaths {
+    /// 数据目录：设置了 `CFBEST_DATA_DIR`（Docker 镜像里是 `/data`）就直接用它，
+    /// 否则是各平台应用数据目录下的 `CFBest`。
     pub fn discover() -> Self {
-        let root = platform_data_dir()
-            .unwrap_or_else(|| {
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|exe| exe.parent().map(Path::to_path_buf))
-                    .unwrap_or_else(|| PathBuf::from("."))
-            })
-            .join("CFBest");
+        let root = match std::env::var_os("CFBEST_DATA_DIR").filter(|dir| !dir.is_empty()) {
+            Some(dir) => PathBuf::from(dir),
+            None => platform_data_dir()
+                .unwrap_or_else(|| {
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+                        .unwrap_or_else(|| PathBuf::from("."))
+                })
+                .join("CFBest"),
+        };
         let exports = root.join("exports");
         let _ = fs::create_dir_all(&exports);
         Self {
@@ -118,8 +126,14 @@ pub fn set_console_logging(enabled: bool) {
     CONSOLE_LOG.store(enabled, Ordering::Relaxed);
 }
 
+/// 让每行日志同时交给 `sink`，只能设置一次。只有 `cfbest-cli serve` 会调用。
+#[allow(dead_code)]
+pub fn set_log_sink(sink: impl Fn(&str, &str) + Send + Sync + 'static) {
+    let _ = LOG_SINK.set(Box::new(sink));
+}
+
 pub fn log_line(message: &str) {
-    let stamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let stamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     if let Some(file) = LOG_FILE.get()
         && let Ok(mut file) = file.lock()
     {
@@ -128,6 +142,9 @@ pub fn log_line(message: &str) {
     }
     if CONSOLE_LOG.load(Ordering::Relaxed) {
         eprintln!("[{stamp}] {message}");
+    }
+    if let Some(sink) = LOG_SINK.get() {
+        sink(&stamp, message);
     }
 }
 

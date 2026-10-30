@@ -14,9 +14,15 @@ publish = false
 [[bin]]
 name = "CFBest"
 path = "src/main.rs"
+required-features = ["gui"]
+
+[features]
+default = ["gui"]
+# 图形界面。无窗口的 cfbest-cli（Linux / NAS / Docker）用 --no-default-features 构建，不编译 gpui。
+gui = ["dep:gpui"]
 
 [dependencies]
-gpui = "0.2.2"
+gpui = { version = "0.2.2", optional = true }
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -27,15 +33,17 @@ rustls-native-certs = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
 unicode-segmentation = "1"
 uuid = "1"
 yaml-rust2 = { version = "0.13", default-features = false }
 
 # macOS：着色器在启动时编译，构建不依赖 Xcode 的 Metal 工具链。
 [target.'cfg(target_os = "macos")'.dependencies]
-gpui = { version = "0.2.2", features = ["runtime_shaders"] }
-# macOS：启动时提升 RLIMIT_NOFILE，避免高并发扫描触发 EMFILE。
+gpui = { version = "0.2.2", features = ["runtime_shaders"], optional = true }
+
+# macOS / Linux：启动时提升 RLIMIT_NOFILE，避免高并发扫描触发 EMFILE。
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

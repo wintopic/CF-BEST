@@ -2,6 +2,17 @@
 
 本项目的所有重要改动都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- NAS 与 Linux 支持：无窗口版 `cfbest-cli serve` 常驻运行局域网服务，在浏览器里管理每日定时优选、参数与订阅链接，查看结果、历史与实时日志；局域网里的代理软件直接添加它提供的订阅地址。提供 Docker 镜像（`ghcr.io/wintopic/cf-best`，x64 / ARM64，适用于群晖、极空间、飞牛等 NAS）、可离线导入的镜像文件与静态链接的 Linux 可执行文件。
+- `cfbest-cli` 单次运行模式：运行一轮自动优选后退出，结果输出到标准输出（感谢 @superdadhobo）。
+
+### 修复
+
+- macOS 上「自动优选」扫描命中 0、几秒就结束：启动时提升文件句柄上限，高并发扫描不再因 EMFILE 失败（感谢 @superdadhobo）。
+
 ## [0.2.0] - 2026-10-29
 
 ### 新增

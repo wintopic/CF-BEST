@@ -2,12 +2,16 @@
 //!
 //! 适合放在常开机器上用计划任务 / launchd / systemd 定时跑，也便于放进容器；
 //! 段池、每日状态、订阅缓存与图形界面共用同一份数据目录，两个入口可以交替使用。
+//! `cfbest-cli serve` 常驻运行局域网服务：按时自动优选，并提供网页管理界面与订阅地址。
 
 // 无窗口模式只用到内核的一部分；其余函数留给图形界面，这里不报 dead_code。
 #[allow(dead_code)]
 #[path = "../core/mod.rs"]
 mod core;
+#[path = "../server/mod.rs"]
+mod server;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -23,7 +27,8 @@ const USAGE: &str = "\
 cfbest-cli — CF Best 的无窗口模式（与图形界面共用配置与段池）
 
 用法
-  cfbest-cli [选项]
+  cfbest-cli [选项]          运行一轮自动优选后退出
+  cfbest-cli serve [选项]    常驻运行局域网服务（网页管理 + 定时优选 + 订阅地址），见 serve --help
 
 选项
   --segments <N>      本轮扫描的 /24 段数（默认取设置）
@@ -106,8 +111,115 @@ impl Args {
     }
 }
 
+const SERVE_USAGE: &str = "cfbest-cli serve — 常驻运行的局域网服务
+
+在浏览器打开 http://<本机 IP>:27208 管理：立即运行、每日定时、设置订阅、查看结果与日志；
+代理软件可直接添加页面上的订阅地址。设置与数据和图形界面共用同一个数据目录。
+
+用法
+  cfbest-cli serve [选项]
+
+选项（也可用环境变量设置，选项优先）
+  --listen <地址:端口>   监听地址，默认 0.0.0.0:27208            CFBEST_LISTEN
+  --password <密码>      网页访问密码，默认不设                  CFBEST_PASSWORD
+  --allow-host <域名>    未设密码时额外允许的访问域名，可重复     CFBEST_ALLOWED_HOSTS（逗号分隔）
+  -h, --help             显示本帮助
+
+其他环境变量
+  CFBEST_DATA_DIR        数据目录（Docker 镜像中为 /data）
+  CFBEST_SUB_URL         启动时写入的 VLESS 订阅链接（之后也可在网页上修改）
+  TZ                     时区，决定每日定时的时间（Docker 镜像默认 Asia/Shanghai）
+";
+
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn serve_main(argv: impl Iterator<Item = String>) -> ExitCode {
+    let mut listen = env_value("CFBEST_LISTEN");
+    let mut password = env_value("CFBEST_PASSWORD");
+    let mut allowed_hosts: Vec<String> = env_value("CFBEST_ALLOWED_HOSTS")
+        .map(|hosts| {
+            hosts
+                .split(',')
+                .map(|host| host.trim().to_string())
+                .filter(|host| !host.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut argv = argv;
+    while let Some(raw) = argv.next() {
+        let (key, inline) = match raw.split_once('=') {
+            Some((key, value)) => (key.to_string(), Some(value.to_string())),
+            None => (raw, None),
+        };
+        let result = match key.as_str() {
+            "--listen" => {
+                take_value(&mut argv, "--listen", inline).map(|value| listen = Some(value))
+            }
+            "--password" => {
+                take_value(&mut argv, "--password", inline).map(|value| password = Some(value))
+            }
+            "--allow-host" => {
+                take_value(&mut argv, "--allow-host", inline).map(|value| allowed_hosts.push(value))
+            }
+            "-h" | "--help" => {
+                print!("{SERVE_USAGE}");
+                return ExitCode::SUCCESS;
+            }
+            other => Err(format!("未知参数：{other}")),
+        };
+        if let Err(err) = result {
+            eprintln!(
+                "{err}
+"
+            );
+            eprint!("{SERVE_USAGE}");
+            return ExitCode::from(2);
+        }
+    }
+    let listen = listen.unwrap_or_else(|| format!("0.0.0.0:{}", server::DEFAULT_PORT));
+    let Ok(listen) = listen.parse::<SocketAddr>() else {
+        eprintln!("监听地址无效：{listen}（应为 地址:端口，例如 0.0.0.0:27208）");
+        return ExitCode::from(2);
+    };
+
+    let paths = AppPaths::discover();
+    storage::init_logging(&paths);
+    storage::install_panic_hook();
+    core::sys::raise_fd_limit();
+    if let Some(url) = env_value("CFBEST_SUB_URL") {
+        let mut settings = storage::load_settings(&paths);
+        if settings.sub_url != url {
+            settings.sub_url = url;
+            storage::save_settings(&paths, &settings);
+            storage::log_line("已按 CFBEST_SUB_URL 设置订阅链接");
+        }
+    }
+    let options = server::ServeOptions {
+        listen,
+        password: password.filter(|password| !password.is_empty()),
+        allowed_hosts,
+    };
+    match server::run(paths, options) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            storage::log_line(&format!("局域网服务启动失败：{err:#}"));
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
-    let args = match Args::parse(std::env::args().skip(1)) {
+    let mut argv = std::env::args().skip(1).peekable();
+    if argv.peek().is_some_and(|first| first == "serve") {
+        argv.next();
+        return serve_main(argv);
+    }
+    let args = match Args::parse(argv) {
         Ok(args) => args,
         Err(err) => {
             eprintln!("{err}\n");

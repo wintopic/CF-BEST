@@ -29,6 +29,7 @@ use gpui::{
 use crate::theme::px;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::core::daily::auto_daily_due;
 use crate::core::model::{
     DailyEntry, DailyState, DailySummary, History, ParamGroup, ScanHit, SegmentScores, Settings,
     SpeedRecord, SubscriptionCache, VerifyRecord, VlessNode,
@@ -1354,10 +1355,6 @@ where
 }
 
 /// 到点（含错过后补跑）且今天还没自动运行过。
-fn auto_daily_due(today: &str, now: (u8, u8), last_date: &str, at: (u8, u8)) -> bool {
-    last_date != today && now >= at
-}
-
 fn parse_hhmm(text: &str) -> Result<(u8, u8), String> {
     let (hour, minute) = text
         .trim()
@@ -1373,7 +1370,7 @@ fn parse_hhmm(text: &str) -> Result<(u8, u8), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{auto_daily_due, parse_hhmm, parse_range};
+    use super::{parse_hhmm, parse_range};
 
     #[test]
     fn parse_range_accepts_bounds_and_trims() {
@@ -1389,17 +1386,6 @@ mod tests {
         assert!(parse_range::<u32>("0", "并发", 1, 10).is_err());
         assert!(parse_range::<u32>("11", "并发", 1, 10).is_err());
         assert!(parse_range::<u32>("", "并发", 1, 10).is_err());
-    }
-
-    #[test]
-    fn auto_daily_due_catches_up_once_per_day() {
-        let at = (9, 0);
-        assert!(!auto_daily_due("2026-10-28", (8, 59), "2026-10-27", at));
-        assert!(auto_daily_due("2026-10-28", (9, 0), "2026-10-27", at));
-        // 9 点在睡眠或忙碌中错过，之后补跑。
-        assert!(auto_daily_due("2026-10-28", (15, 30), "2026-10-27", at));
-        assert!(auto_daily_due("2026-10-28", (9, 1), "", at));
-        assert!(!auto_daily_due("2026-10-28", (15, 30), "2026-10-28", at));
     }
 
     #[test]

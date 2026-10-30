@@ -53,6 +53,11 @@ pub struct DailyResult {
     pub output_path: Option<std::path::PathBuf>,
 }
 
+/// 每日自动优选是否该开始：到点后当天还没运行过就开始，错过时间（睡眠、关机）之后补跑。
+pub fn auto_daily_due(today: &str, now: (u8, u8), last_date: &str, at: (u8, u8)) -> bool {
+    last_date != today && now >= at
+}
+
 async fn ensure_pool(
     paths: &AppPaths,
     emit_sender: &mut impl FnMut(DailyEvent),
@@ -589,6 +594,17 @@ mod tests {
             let _ = fs::remove_file(&paths.daily_state);
             let _ = fs::remove_dir(&paths.root);
         }
+    }
+
+    #[test]
+    fn auto_daily_due_catches_up_once_per_day() {
+        let at = (9, 0);
+        assert!(!auto_daily_due("2026-10-28", (8, 59), "2026-10-27", at));
+        assert!(auto_daily_due("2026-10-28", (9, 0), "2026-10-27", at));
+        // 9 点在睡眠或忙碌中错过，之后补跑。
+        assert!(auto_daily_due("2026-10-28", (15, 30), "2026-10-27", at));
+        assert!(auto_daily_due("2026-10-28", (9, 1), "", at));
+        assert!(!auto_daily_due("2026-10-28", (15, 30), "2026-10-28", at));
     }
 
     #[tokio::test]

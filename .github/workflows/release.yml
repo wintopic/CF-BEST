@@ -1,7 +1,8 @@
 name: Release
 
-# main 上的 CI 通过后，如果 Cargo.toml 的版本号还没发布过，就构建 Windows 与 macOS 安装包，
-# 打上 v<版本号> 标签并发布到 GitHub Releases；这个版本已经发布过则什么也不做。
+# main 上的 CI 通过后，如果 Cargo.toml 的版本号还没发布过，就构建 Windows、macOS 安装包与
+# Linux 无窗口版（可执行文件 + Docker 镜像），打上 v<版本号> 标签并发布到 GitHub Releases，
+# 镜像推送到 ghcr.io；这个版本已经发布过则什么也不做。
 # 发版只需改版本号并在 CHANGELOG.md 写好这一版的段落。手动推送 v* 标签、在 Actions 页面
 # 手动运行同样会在版本未发布时发布（手动运行遇到已发布的版本只构建产物）。
 on:
@@ -15,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 # 同一时间只跑一个发布：推 main 与推标签同时触发时，后一个会看到版本已发布而跳过。
 concurrency:
@@ -87,7 +89,7 @@ jobs:
           cp target/release/CFBest.exe "dist/CFBest-${{ needs.version.outputs.version }}-windows-x64.exe"
       - uses: actions/upload-artifact@v5
         with:
-          name: windows
+          name: release-windows
           path: dist/*
 
   macos:
@@ -149,13 +151,107 @@ jobs:
           mkdir out && mv "CFBest-${VERSION}-macos-universal.dmg" out/
       - uses: actions/upload-artifact@v5
         with:
-          name: macos
+          name: release-macos
           path: out/*
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: version
+    if: needs.version.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
+    # 各架构在原生 runner 上构建，不经 QEMU 模拟编译。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      # 同一个 Dockerfile 导出静态链接的可执行文件，再打包成镜像（第二次构建复用缓存）。
+      - name: Build binary
+        run: |
+          docker buildx build --platform ${{ matrix.platform }} --target binary --output type=local,dest=bin .
+          mkdir dist
+          mv bin/cfbest-cli "dist/cfbest-cli-${VERSION}-linux-${{ matrix.arch }}"
+      # 供无法直连 ghcr.io 的 NAS 在管理界面里导入镜像文件。
+      - name: Build offline image
+        run: |
+          docker buildx build --platform ${{ matrix.platform }} --tag "cf-best:${VERSION}"             --output "type=docker,dest=dist/cf-best-docker-${VERSION}-linux-${{ matrix.arch }}.tar" .
+          gzip -9 "dist/cf-best-docker-${VERSION}-linux-${{ matrix.arch }}.tar"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/*
+      - uses: docker/login-action@v3
+        if: needs.version.outputs.publish == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # 按摘要推送单架构镜像，由 docker 任务合并成多架构标签。
+      - name: Push image by digest
+        id: push
+        if: needs.version.outputs.publish == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        if: needs.version.outputs.publish == 'true'
+        run: |
+          mkdir digests
+          touch "digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+      - uses: actions/upload-artifact@v5
+        if: needs.version.outputs.publish == 'true'
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests/*
+
+  docker:
+    name: Docker image
+    if: needs.version.outputs.publish == 'true'
+    needs: [version, linux]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: digests-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag multi-arch image
+        working-directory: digests
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create -t "$image:$VERSION" -t "$image:latest"             $(printf "$image@sha256:%s " *)
+          docker buildx imagetools inspect "$image:$VERSION"
 
   publish:
     name: Publish release
     if: needs.version.outputs.publish == 'true'
-    needs: [version, windows, macos]
+    needs: [version, windows, macos, linux]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -185,6 +281,7 @@ jobs:
           cat notes.md
       - uses: actions/download-artifact@v5
         with:
+          pattern: release-*
           path: dist
           merge-multiple: true
       - name: Checksums

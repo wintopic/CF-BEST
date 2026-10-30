@@ -29,6 +29,7 @@
 - [功能](#功能)
 - [截图](#截图)
 - [下载安装](#下载安装)
+- [NAS 与 Linux（网页管理）](#nas-与-linux网页管理)
 - [快速上手](#快速上手)
 - [工作原理](#工作原理)
 - [快捷键](#快捷键)
@@ -88,6 +89,8 @@
 | --- | --- | --- |
 | Windows 10 / 11（x64） | `CFBest-<版本>-windows-x64.exe` | 免安装，双击运行 |
 | macOS 11+（Apple 芯片 / Intel） | `CFBest-<版本>-macos-universal.dmg` | 打开后把 **CF Best** 拖入「应用程序」 |
+| Linux 服务器（x64 / ARM64） | `cfbest-cli-<版本>-linux-x64` / `-linux-arm64` | 无窗口版，浏览器管理，见 [NAS 与 Linux](#nas-与-linux网页管理) |
+| NAS（Docker） | 镜像 `ghcr.io/wintopic/cf-best`，或 `cf-best-docker-<版本>-linux-*.tar.gz` | 群晖、极空间、飞牛等，见 [NAS 与 Linux](#nas-与-linux网页管理) |
 
 每个版本都附带 `SHA256SUMS.txt`，可用于校验下载文件。
 
@@ -108,6 +111,61 @@ xattr -dr com.apple.quarantine "/Applications/CF Best.app"
 程序没有代码签名证书，SmartScreen 会对新发布的文件给出提示。点击「更多信息」→「仍要运行」即可。可以先用 `SHA256SUMS.txt` 校验文件。
 
 </details>
+
+## NAS 与 Linux（网页管理）
+
+在 NAS 或 Linux 服务器上常驻运行无窗口版，用浏览器管理：每天定时自动优选，局域网里的手机、电脑直接在代理软件里添加它提供的订阅地址，每轮优选完成后更新订阅即可拿到最新节点，不必开着电脑。
+
+网页里可以立即运行 / 停止、设置每日运行时间与优选参数、填写 VLESS 订阅链接、查看 Top 结果、历史与实时日志，并复制订阅地址（Clash / V2Ray 两种格式，或按客户端自动选择）。
+
+### Docker（推荐）
+
+```bash
+docker run -d --name cf-best --restart unless-stopped   -p 27208:27208 -v ./cf-best:/data   -e TZ=Asia/Shanghai -e CFBEST_PASSWORD=change-me   ghcr.io/wintopic/cf-best:latest
+```
+
+或使用仓库里的 [`docker-compose.yml`](docker-compose.yml)：`docker compose up -d`。然后在浏览器打开 `http://<NAS 的 IP>:27208`。镜像同时提供 x64 与 ARM64。
+
+<details>
+<summary><b>群晖 / 极空间 / 飞牛等 NAS 的图形界面设置</b></summary>
+
+在 NAS 的 Docker 应用（群晖 Container Manager、极空间 Docker、飞牛 fnOS Docker 等）里：
+
+1. **镜像**：搜索或添加 `ghcr.io/wintopic/cf-best:latest`。拉取不到（网络连不上 ghcr.io）时，从 [Releases](https://github.com/wintopic/CF-BEST/releases/latest) 下载 `cf-best-docker-<版本>-linux-x64.tar.gz`（ARM 机型选 `-linux-arm64`），在镜像管理里选择「导入」。
+2. **端口**：容器端口 `27208` 映射到本机任意空闲端口（例如同样的 `27208`）。
+3. **存储空间 / 卷**：把 NAS 上的一个文件夹（如 `/docker/cf-best`）挂载到容器的 `/data`，设置与结果都保存在这里。
+4. **环境变量**（可选）：`CFBEST_PASSWORD` 设置网页访问密码；`TZ` 默认 `Asia/Shanghai`。
+5. 勾选「自动重启」，启动后用 `http://<NAS 的 IP>:<端口>` 打开网页。
+
+网络模式用默认的 bridge 即可，不需要 host 模式或特权。
+
+</details>
+
+### Linux 可执行文件
+
+从 Releases 下载对应架构的 `cfbest-cli-<版本>-linux-*`（静态链接，任何发行版都能运行）：
+
+```bash
+chmod +x cfbest-cli-*-linux-x64
+./cfbest-cli-*-linux-x64 serve
+```
+
+数据保存在 `~/.local/share/CFBest`（或 `CFBEST_DATA_DIR` 指定的目录）。用 systemd 常驻时，`ExecStart` 写成 `/usr/local/bin/cfbest-cli serve` 即可。
+
+### 选项与安全
+
+| 环境变量 | 命令行 | 说明 |
+| --- | --- | --- |
+| `CFBEST_PASSWORD` | `--password` | 网页访问密码，默认不设。**NAS 暴露到公网时务必设置** |
+| `CFBEST_LISTEN` | `--listen` | 监听地址，默认 `0.0.0.0:27208` |
+| `CFBEST_ALLOWED_HOSTS` | `--allow-host` | 未设密码时额外允许的访问域名（逗号分隔） |
+| `CFBEST_DATA_DIR` | | 数据目录，镜像中为 `/data` |
+| `CFBEST_SUB_URL` | | 启动时写入的 VLESS 订阅链接，之后也可在网页上修改 |
+| `TZ` | | 时区，决定每日定时的时间 |
+
+- 订阅地址形如 `http://<IP>:27208/<令牌>/daily`，令牌随机生成、即为凭证，不需要密码，代理软件可以直接更新；网页上可随时「更换令牌」让旧地址失效。
+- 没设密码时，网页只接受用 IP、机器名或 `.local` / `.lan` 等内网域名访问，防止外部网页借 DNS 重绑定操作服务；用自己的域名访问请设置密码，或把域名加入 `CFBEST_ALLOWED_HOSTS`。
+- 与图形界面共用数据格式：可以把电脑上的 `CFBest` 数据目录复制到 NAS 的挂载目录里，沿用段池、设置与订阅。同一个数据目录同一时间只能被一个实例使用。
 
 ## 快速上手
 
@@ -163,10 +221,12 @@ macOS 上用 `⌘` 代替 `Ctrl`。
 - 所有设置、历史记录与导出文件都保存在本机：
   - Windows：`%APPDATA%\CFBest`
   - macOS：`~/Library/Application Support/CFBest`
+  - Linux：`~/.local/share/CFBest`；Docker 镜像中为挂载的 `/data`
   
   侧栏底部的「数据目录」可以直接打开该文件夹。
 - 应用只访问以下地址：被测 IP 本身、Cloudflare 的公开接口（IP 段列表、`/cdn-cgi/trace`、`speed.cloudflare.com`、`cp.cloudflare.com`）、RIPE Stat（查询 ASN 前缀）、你填写的订阅链接，以及检查与下载更新用的 GitHub 和下载镜像（gh-proxy.com、ghfast.top、ghproxy.net）。
 - 导入过代理软件后，应用会在 `127.0.0.1` 上提供订阅地址供客户端更新（只接受本机访问，地址含随机令牌）；应用没在运行时，客户端保留上次导入的节点。
+- 无窗口版的局域网服务（`cfbest-cli serve`）在局域网端口上提供网页与订阅地址，安全设置见 [NAS 与 Linux](#nas-与-linux网页管理)。
 - 没有统计或遥测。检查更新只向 GitHub 查询最新版本信息，不上传任何数据，可在状态栏右下角的版本号弹层里关闭。订阅链接与节点信息只保存在本机：链接在 `settings.json`，最近一次成功载入的节点在 `subscription.json`（订阅拉取失败时沿用）。
 
 ## 从源码构建
@@ -181,6 +241,7 @@ cargo run --release
 
 - **Windows**：需要 Visual Studio 的 MSVC 生成工具（“使用 C++ 的桌面开发”）。产物为 `target/release/CFBest.exe`，已内嵌图标与版本信息。
 - **macOS**：需要 Xcode 命令行工具（`xcode-select --install`）。`.app` 与 `.dmg` 的打包步骤见 [`release.yml`](.github/workflows/release.yml)。
+- **Linux / 无窗口版**：`cargo build --release --no-default-features --bin cfbest-cli` 只编译命令行与局域网服务，不需要图形界面依赖；`docker build -t cf-best .` 构建镜像。
 
 提交前检查（与 CI 一致）：
 
@@ -188,6 +249,7 @@ cargo run --release
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+cargo clippy --locked --no-default-features --all-targets -- -D warnings   # 无窗口版
 cargo test --locked -- --ignored   # 需要联网的测试：边缘 trace、测速下载、RIPE 前缀等
 ```
 
@@ -213,10 +275,10 @@ cargo test --locked -- --ignored   # 需要联网的测试：边缘 trace、测�
 
 ## 无窗口模式（cfbest-cli）
 
-除图形界面外，仓库还带一个无窗口的命令行入口，适合放在常开机器上用计划任务 / launchd / systemd 定时跑：
+除图形界面外，仓库还带一个无窗口的命令行入口。`cfbest-cli serve` 常驻运行局域网服务（见 [NAS 与 Linux](#nas-与-linux网页管理)）；不带 `serve` 时运行一轮优选后退出，适合用计划任务 / launchd / systemd 定时跑：
 
 ```bash
-cargo run --release --bin cfbest-cli -- --segments 20 --test 20 --top 5
+cargo run --release --no-default-features --bin cfbest-cli -- --segments 20 --test 20 --top 5
 ```
 
 它与图形界面共用同一份数据目录（设置、段池、订阅缓存、每日进度），两个入口可以交替使用：界面里配好订阅链接，命令行就能直接跑隧道验证。
@@ -247,6 +309,7 @@ cfbest-cli --json --quiet | jq '.top[0]'
 src/
   main.rs            窗口创建、快捷键与菜单
   bin/cfbest-cli.rs  无窗口的命令行入口，复用 core 的全部逻辑
+  server/            局域网服务（cfbest-cli serve）：定时优选、网页管理界面（index.html）与订阅地址
   core/              与界面无关的业务逻辑：扫描、测速、验证、段池、每日优选、存储、统计
   app/               应用状态与各页面：侧栏、标题栏、事件处理、操作回调、*_page.rs
   ui/                通用组件：按钮、输入框、提示气泡、图表

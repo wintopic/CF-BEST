@@ -3,6 +3,9 @@
 //! 地址形如 `http://127.0.0.1:端口/令牌/daily/clash`。来源是 `daily`（自动优选）或 `verify`
 //! （可用性验证）；格式是 `clash`（YAML）或 `v2ray`（Base64 分享链接），省略时按 User-Agent
 //! 判断。令牌随机生成，Host 只接受本机地址，网页即使借 DNS 重绑定连到这个端口也读不到节点。
+//!
+//! 无窗口的局域网服务（`cfbest-cli serve`）在自己的端口上用 [`lan_response`] 提供同样的订阅，
+//! 那里不限制 Host：局域网里的手机、电脑要用 NAS 的地址来更新，令牌就是凭证。
 
 use std::io;
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
@@ -82,6 +85,12 @@ pub fn publish(source: FeedSource, feed: Option<ProxyFeed>) {
     }
 }
 
+/// 设置订阅地址中的令牌（局域网服务不经 [`start`] 启动本机服务，单独设置）。
+#[allow(dead_code)]
+pub fn set_token(token: &str) {
+    shared().token = token.to_string();
+}
+
 /// 订阅地址；`format` 为 None 时由服务按 User-Agent 选择格式，适合手动粘贴到任意客户端。
 pub fn feed_url(port: u16, token: &str, source: FeedSource, format: Option<FeedFormat>) -> String {
     let mut url = format!("http://127.0.0.1:{port}/{token}/{}", source.slug());
@@ -150,6 +159,19 @@ async fn handle(mut stream: TcpStream, port: u16) {
     let Ok(Ok(head)) = timeout(Duration::from_secs(5), read_head(&mut stream)).await else {
         return;
     };
+    let response = answer(&head, Some(port));
+    let _ = timeout(Duration::from_secs(10), stream.write_all(&response)).await;
+    let _ = stream.shutdown().await;
+}
+
+/// 局域网服务收到的订阅请求：按令牌返回节点，不检查 Host。
+#[allow(dead_code)]
+pub fn lan_response(head: &str) -> Vec<u8> {
+    answer(head, None)
+}
+
+/// 用当前令牌与节点回答一个请求并记日志；`local_port` 为 Some 时只接受本机 Host。
+fn answer(head: &str, local_port: Option<u16>) -> Vec<u8> {
     let (token, daily, verify) = {
         let shared = shared();
         (
@@ -158,7 +180,7 @@ async fn handle(mut stream: TcpStream, port: u16) {
             shared.verify.clone(),
         )
     };
-    let response = respond(&head, port, &token, |source| match source {
+    let response = respond(head, local_port, &token, |source| match source {
         FeedSource::Daily => daily.clone(),
         FeedSource::Verify => verify.clone(),
     });
@@ -169,13 +191,13 @@ async fn handle(mut stream: TcpStream, port: u16) {
     } else {
         request.replace(token.as_str(), "***")
     };
-    storage::log_line(&format!("本机订阅 {} ← {request}", response.status));
-    let _ = timeout(
-        Duration::from_secs(10),
-        stream.write_all(&response.to_bytes()),
-    )
-    .await;
-    let _ = stream.shutdown().await;
+    let scope = if local_port.is_some() {
+        "本机"
+    } else {
+        "局域网"
+    };
+    storage::log_line(&format!("{scope}订阅 {} ← {request}", response.status));
+    response.to_bytes()
 }
 
 /// 读到请求头结束（空行）为止，最多 16 KB；订阅请求都是不带正文的 GET。
@@ -244,9 +266,10 @@ impl Response {
     }
 }
 
+/// `local_port` 为 Some 时只接受指向本机该端口的 Host（本机订阅服务）；None 不检查（局域网服务）。
 fn respond(
     head: &str,
-    port: u16,
+    local_port: Option<u16>,
     token: &str,
     feed_for: impl Fn(FeedSource) -> Option<Arc<ProxyFeed>>,
 ) -> Response {
@@ -263,7 +286,9 @@ fn respond(
     let head_only = method == "HEAD";
     let mut response = if method != "GET" && !head_only {
         Response::text(405, "只支持 GET 请求")
-    } else if header("host").is_some_and(|host| !host_allowed(host, port)) {
+    } else if let Some(port) = local_port
+        && header("host").is_some_and(|host| !host_allowed(host, port))
+    {
         Response::text(403, "只接受本机访问")
     } else {
         route(target, token, header("user-agent").unwrap_or(""), feed_for)
@@ -387,7 +412,7 @@ mod tests {
 
     fn get(path: &str, host: &str, agent: &str) -> Response {
         let head = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {agent}\r\n\r\n");
-        respond(&head, PORT, TOKEN, |source| {
+        respond(&head, Some(PORT), TOKEN, |source| {
             (source == FeedSource::Daily).then(feed)
         })
     }
@@ -463,11 +488,13 @@ mod tests {
             .status,
             403
         );
-        let empty_token = respond("GET //daily HTTP/1.1\r\n\r\n", PORT, "", |_| Some(feed()));
+        let empty_token = respond("GET //daily HTTP/1.1\r\n\r\n", Some(PORT), "", |_| {
+            Some(feed())
+        });
         assert_eq!(empty_token.status, 404);
         let post = respond(
             &format!("POST /{TOKEN}/daily HTTP/1.1\r\n\r\n"),
-            PORT,
+            Some(PORT),
             TOKEN,
             |_| Some(feed()),
         );
@@ -475,10 +502,30 @@ mod tests {
     }
 
     #[test]
+    fn lan_requests_skip_the_host_check_but_still_need_the_token() {
+        let lan = |path: &str| {
+            respond(
+                &format!(
+                    "GET {path} HTTP/1.1
+Host: nas.lan:27208
+
+"
+                ),
+                None,
+                TOKEN,
+                |_| Some(feed()),
+            )
+            .status
+        };
+        assert_eq!(lan(&format!("/{TOKEN}/daily/clash")), 200);
+        assert_eq!(lan("/wrong/daily/clash"), 404);
+    }
+
+    #[test]
     fn head_request_sends_headers_only() {
         let response = respond(
             &format!("HEAD /{TOKEN}/daily/clash HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\n\r\n"),
-            PORT,
+            Some(PORT),
             TOKEN,
             |_| Some(feed()),
         );

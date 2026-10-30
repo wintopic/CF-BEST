@@ -43,3 +43,25 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+  linux:
+    name: Linux (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 不带图形界面：只编译 cfbest-cli 与内核，NAS / Docker 用的就是这个组合。
+      - name: Clippy
+        run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --no-default-features
+
+      - name: Docker image
+        run: docker build -t cf-best:ci .

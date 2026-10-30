@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CF Best</title>
+<style>
+  :root {
+    --bg: #f6f7f6; --card: #ffffff; --line: #e3e7e4; --text: #1d2420; --muted: #6b7570;
+    --accent: #4b6f5a; --accent-hover: #436651; --accent-soft: #e8ecea; --on-accent: #fdfdfd;
+    --green: #2f7d4f; --green-soft: #e3f1e8; --amber: #a26a12; --amber-soft: #fbf0dc;
+    --red: #b4423a; --red-soft: #f8e4e2; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121513; --card: #1a1e1b; --line: #2b312d; --text: #e4e9e5; --muted: #8d9891;
+      --accent: #7fa58d; --accent-hover: #8fb39c; --accent-soft: #24302a; --on-accent: #0b0d0c;
+      --green: #6cc08d; --green-soft: #1d2f24; --amber: #e0a94a; --amber-soft: #33291a;
+      --red: #e07a70; --red-soft: #3a2220;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line);
+           background: var(--card); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  header .version { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px; display: grid; gap: 16px;
+         grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); padding: 12px; } }
+  .col { display: grid; gap: 16px; align-content: start; grid-template-columns: minmax(0, 1fr); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .sub { font-weight: normal; color: var(--muted); font-size: 12px; }
+  .card h2 .actions { margin-left: auto; display: flex; gap: 8px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  button { font: inherit; border-radius: 7px; padding: 6px 14px; cursor: pointer; border: 1px solid transparent;
+           background: var(--accent); color: var(--on-accent); }
+  button:hover { background: var(--accent-hover); }
+  button.ghost { background: var(--accent-soft); color: var(--accent); }
+  button.ghost:hover { border-color: var(--accent); background: var(--accent-soft); }
+  button.danger { background: var(--red-soft); color: var(--red); }
+  button.danger:hover { border-color: var(--red); background: var(--red-soft); }
+  button.small { padding: 3px 10px; font-size: 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--muted); }
+  .pill.running { background: var(--amber-soft); color: var(--amber); }
+  .pill.ok { background: var(--green-soft); color: var(--green); }
+  .pill.bad { background: var(--red-soft); color: var(--red); }
+  .stage { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .stage strong { font-size: 16px; }
+  .bar { height: 6px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; margin: 10px 0 6px; }
+  .bar div { height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .stat { background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+  .stat b { display: block; font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: normal; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.mono { font-family: var(--mono); }
+  .table-wrap { overflow-x: auto; }
+  .empty { color: var(--muted); padding: 14px 0 4px; text-align: center; }
+  .feed { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; }
+  .feed code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 5px 8px; border-radius: 6px;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .notice { border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
+  .notice.amber { background: var(--amber-soft); color: var(--amber); }
+  .notice.red { background: var(--red-soft); color: var(--red); }
+  .notice.green { background: var(--green-soft); color: var(--green); }
+  form.settings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  form.settings .wide { grid-column: 1 / -1; }
+  @media (max-width: 480px) { .stats { grid-template-columns: 1fr 1fr; } form.settings { grid-template-columns: minmax(0, 1fr); } }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
+  input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                  border-radius: 7px; padding: 6px 9px; min-width: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+  .logs { font-family: var(--mono); font-size: 12px; background: var(--bg); border-radius: 8px; padding: 8px 10px;
+          height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .logs .t { color: var(--muted); }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); padding: 8px 16px; border-radius: 8px;
+           background: var(--text); color: var(--bg); font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; }
+  #toast.show { opacity: .94; }
+  #login { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center; justify-content: center; z-index: 30; }
+  #login .card { width: min(340px, 90vw); display: grid; gap: 12px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CF Best</h1>
+  <span class="version" id="version"></span>
+  <span class="pill" id="status-pill">连接中…</span>
+  <span class="spacer"></span>
+  <button class="ghost small hidden" id="logout">退出登录</button>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card">
+      <h2>自动优选 <span class="sub" id="next-run"></span>
+        <span class="actions">
+          <button id="run">立即运行</button>
+          <button class="danger hidden" id="stop">停止</button>
+        </span>
+      </h2>
+      <div id="job-idle">
+        <div class="muted" id="last-result">还没有运行过</div>
+      </div>
+      <div id="job-running" class="hidden">
+        <div class="stage"><strong id="job-stage"></strong><span class="muted" id="job-detail"></span></div>
+        <div class="bar"><div id="job-bar"></div></div>
+        <div class="small muted" id="job-label"></div>
+      </div>
+      <div class="stats">
+        <div class="stat"><span class="small muted">段池进度</span><b id="pool-progress">—</b></div>
+        <div class="stat"><span class="small muted">订阅节点</span><b id="sub-count">—</b></div>
+        <div class="stat"><span class="small muted">验证方式</span><b id="verify-kind">—</b></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>最新结果 <span class="sub" id="top-time"></span>
+        <span class="actions"><button class="ghost small" id="copy-top">复制 IP</button></span>
+      </h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>IP</th><th>机房</th><th class="num">最快</th><th class="num">均值</th><th class="num">延迟</th><th>验证</th></tr></thead>
+          <tbody id="top-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="top-empty">暂无结果：点「立即运行」开始第一轮优选</div>
+    </section>
+
+    <section class="card">
+      <h2>运行日志</h2>
+      <div class="logs" id="logs"></div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <h2>订阅地址 <span class="sub">导入代理软件</span></h2>
+      <div class="notice amber hidden" id="feed-notice"></div>
+      <div class="feed">
+        <span class="small muted">自动</span><code id="feed-auto"></code><button class="ghost small" data-copy="feed-auto">复制</button>
+        <span class="small muted">Clash</span><code id="feed-clash"></code><button class="ghost small" data-copy="feed-clash">复制</button>
+        <span class="small muted">V2Ray</span><code id="feed-v2ray"></code><button class="ghost small" data-copy="feed-v2ray">复制</button>
+      </div>
+      <p class="small muted">在 Clash Verge、Karing、v2rayN 等客户端里添加为订阅，每轮优选完成后更新订阅即可拿到最新节点。
+        「自动」按客户端类型返回 Clash 或 V2Ray 格式。</p>
+      <div class="row"><button class="danger small" id="reset-token">更换令牌</button>
+        <span class="small muted">旧地址随即失效</span></div>
+    </section>
+
+    <section class="card">
+      <h2>设置</h2>
+      <div class="notice hidden" id="sub-notice"></div>
+      <form class="settings" id="settings" autocomplete="off">
+        <label class="wide">VLESS 订阅链接（用于隧道验证与生成订阅，可留空）
+          <input name="sub_url" type="url" placeholder="https://…">
+        </label>
+        <label class="check wide"><input name="auto_daily" type="checkbox"> 每天自动优选</label>
+        <label>运行时间<input name="auto_time" type="time" required></label>
+        <label>段池策略
+          <select name="pool_strategy">
+            <option value="balanced">均衡轮转</option>
+            <option value="sequential">顺序覆盖</option>
+            <option value="network">网络优选</option>
+          </select>
+        </label>
+        <label>每轮段数<input name="daily_segments" type="number" min="1" max="200" required></label>
+        <label>测速数量<input name="daily_test" type="number" min="1" max="500" required></label>
+        <label>保留 Top N<input name="daily_top" type="number" min="1" max="100" required></label>
+        <label>扫描并发<input name="daily_concurrency" type="number" min="1" max="1000" required></label>
+        <label>握手超时（秒）<input name="scan_timeout_secs" type="number" min="0.5" max="30" step="0.5" required></label>
+        <div class="row wide">
+          <button type="submit">保存设置</button>
+          <button type="button" class="ghost" id="refresh-sub">重新拉取订阅</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>历史</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>时间</th><th class="num">扫描</th><th class="num">命中</th><th class="num">Top</th><th class="num">最快</th></tr></thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="history-empty">暂无记录</div>
+      <p class="small muted" id="data-dir"></p>
+    </section>
+  </div>
+</main>
+
+<div id="login">
+  <form class="card" id="login-form">
+    <h2>CF Best</h2>
+    <label>访问密码<input name="password" type="password" autocomplete="current-password" required autofocus></label>
+    <div class="small" id="login-error" style="color: var(--red)"></div>
+    <button type="submit">登录</button>
+  </form>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const VERIFY = { tunnel: "隧道验证", tls: "TLS 基础验证", unknown: "—" };
+let lastSeq = null;
+let state = null;
+let settingsDirty = false;
+let timer = null;
+
+function toast(text) {
+  const el = $("toast");
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+async function api(path, body) {
+  const options = body === undefined
+    ? { credentials: "same-origin" }
+    : { method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CFBest": "1" }, body: JSON.stringify(body) };
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 401 && data.login) { showLogin(); throw new Error(data.error || "请先登录"); }
+  if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
+  return data;
+}
+
+async function action(path, body = {}) {
+  try {
+    const data = await api(path, body);
+    if (data.message) toast(data.message);
+    refresh();
+    return data;
+  } catch (err) { toast(err.message); }
+}
+
+function cell(text, cls) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (cls) td.className = cls;
+  return td;
+}
+
+function fill(tbody, rows, emptyEl) {
+  tbody.replaceChildren(...rows.map((cells) => { const tr = document.createElement("tr"); tr.append(...cells); return tr; }));
+  emptyEl.classList.toggle("hidden", rows.length > 0);
+}
+
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // 局域网用 http 访问时浏览器不开放剪贴板接口，退回到选中文本复制。
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed"; area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  toast("已复制");
+}
+
+function feedUrl(token, format) {
+  return `${location.protocol}//${location.host}/${token}/daily${format ? "/" + format : ""}`;
+}
+
+function render(s) {
+  state = s;
+  $("version").textContent = "v" + s.version;
+  $("logout").classList.toggle("hidden", !s.password);
+  const job = s.job;
+  const pill = $("status-pill");
+  pill.className = "pill" + (job ? " running" : "");
+  pill.textContent = job ? `运行中 · ${job.trigger}` : "空闲";
+  $("run").disabled = !!job;
+  $("stop").classList.toggle("hidden", !job);
+  $("job-idle").classList.toggle("hidden", !!job);
+  $("job-running").classList.toggle("hidden", !job);
+  if (job) {
+    $("job-stage").textContent = job.stage;
+    $("job-detail").textContent = job.detail;
+    $("job-bar").style.width = job.total ? `${Math.min(100, 100 * job.done / job.total)}%` : "0";
+    $("job-label").textContent = job.total ? `${job.done} / ${job.total} · ${job.label}` : `开始于 ${job.started}`;
+  } else {
+    $("last-result").textContent = s.last_result || (s.daily.last_run ? `上次完成：${s.daily.last_run}` : "还没有运行过");
+  }
+  $("next-run").textContent = s.next_run ? `下次：${s.next_run}` : "未开启每日自动运行";
+
+  const d = s.daily;
+  $("pool-progress").textContent = d.pool_count ? `${d.cursor + 1} / ${d.pool_count} · 第 ${d.round} 轮` : "—";
+  $("sub-count").textContent = s.subscription.loading ? "载入中…" : (s.subscription.count ? `${s.subscription.count} 个` : "无");
+  $("verify-kind").textContent = s.subscription.node ? "隧道验证" : "TLS 基础";
+
+  $("top-time").textContent = d.last_run ? `${d.last_run} · ${VERIFY[d.verification] || ""}` : "";
+  fill($("top-body"), d.top.map((e, i) => [
+    cell(i + 1), cell(e.port === 443 ? e.ip : `${e.ip}:${e.port}`, "mono"), cell(e.colo),
+    cell(e.best_mbps.toFixed(1) + " Mbps", "num"), cell(e.avg_mbps.toFixed(1), "num"),
+    cell(Math.round(e.latency_ms) + " ms", "num"), cell(VERIFY[e.verification] || "—"),
+  ]), $("top-empty"));
+
+  for (const [id, format] of [["feed-auto", ""], ["feed-clash", "clash"], ["feed-v2ray", "v2ray"]]) {
+    const url = feedUrl(s.feed.token, format);
+    $(id).textContent = url;
+    $(id).title = url;
+  }
+  const feedNotice = $("feed-notice");
+  let feedText = "";
+  if (!s.subscription.node) feedText = "需要先在下方设置包含 VLESS + WS 节点的订阅链接，订阅地址才有节点。";
+  else if (!s.feed.count) feedText = "订阅已载入，完成一轮隧道验证通过的优选后，订阅地址就会有节点。";
+  feedNotice.textContent = feedText;
+  feedNotice.classList.toggle("hidden", !feedText);
+
+  const subNotice = $("sub-notice");
+  const sub = s.subscription;
+  if (sub.loading) { subNotice.className = "notice amber"; subNotice.textContent = "正在拉取订阅…"; }
+  else if (sub.error) {
+    subNotice.className = "notice red";
+    subNotice.textContent = `订阅拉取失败${sub.count ? `，沿用 ${sub.time} 的 ${sub.count} 个节点` : ""}：${sub.error}`;
+  } else if (sub.node) { subNotice.className = "notice green"; subNotice.textContent = `${sub.count} 个节点（${sub.time}）· 隧道验证用：${sub.node}`; }
+  else if (s.settings.sub_url && sub.count) { subNotice.className = "notice amber"; subNotice.textContent = "订阅里没有 VLESS + WS 节点，只能做 TLS 基础验证。"; }
+  else subNotice.className = "notice hidden";
+
+  fill($("history-body"), s.history.map((run) => [
+    cell(run.time), cell(run.scanned, "num"), cell(run.hits, "num"), cell(run.top, "num"),
+    cell(run.best_mbps ? run.best_mbps.toFixed(1) : "—", "num"),
+  ]), $("history-empty"));
+  $("data-dir").textContent = `数据目录：${s.data_dir}`;
+
+  if (!settingsDirty) fillSettings(s.settings);
+
+  const logs = $("logs");
+  const atBottom = logs.scrollHeight - logs.scrollTop - logs.clientHeight < 30;
+  for (const line of s.logs) {
+    const div = document.createElement("div");
+    const time = document.createElement("span");
+    time.className = "t";
+    time.textContent = line.time.slice(11) + " ";
+    div.append(time, line.text);
+    logs.append(div);
+    lastSeq = line.seq;
+  }
+  while (logs.childElementCount > 400) logs.firstElementChild.remove();
+  if (atBottom) logs.scrollTop = logs.scrollHeight;
+}
+
+function fillSettings(settings) {
+  const form = $("settings");
+  for (const [key, value] of Object.entries(settings)) {
+    const input = form.elements[key];
+    if (!input) continue;
+    if (input.type === "checkbox") input.checked = value; else input.value = value;
+  }
+}
+
+async function refresh() {
+  clearTimeout(timer);
+  try {
+    render(await api("/api/state" + (lastSeq === null ? "" : `?since=${lastSeq}`)));
+    hideLogin();
+  } catch (err) {
+    if ($("login").style.display !== "flex") {
+      const pill = $("status-pill");
+      pill.className = "pill bad";
+      pill.textContent = "连接失败";
+    }
+  }
+  timer = setTimeout(refresh, state && state.job ? 1500 : 5000);
+}
+
+function showLogin() { $("login").style.display = "flex"; $("login-form").elements.password.focus(); }
+function hideLogin() { $("login").style.display = "none"; }
+
+$("login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/login", { password: event.target.elements.password.value });
+    event.target.reset();
+    $("login-error").textContent = "";
+    lastSeq = null;
+    $("logs").replaceChildren();
+    refresh();
+  } catch (err) { $("login-error").textContent = err.message; }
+});
+$("logout").addEventListener("click", async () => { await action("/api/logout"); showLogin(); });
+$("run").addEventListener("click", () => action("/api/run"));
+$("stop").addEventListener("click", () => action("/api/stop"));
+$("refresh-sub").addEventListener("click", () => action("/api/subscription/refresh"));
+$("reset-token").addEventListener("click", () => {
+  if (confirm("更换后，代理软件里已添加的订阅地址会失效，需要重新添加。确定更换？")) action("/api/token/reset");
+});
+$("copy-top").addEventListener("click", () => {
+  if (!state || !state.daily.top.length) return toast("暂无结果");
+  copy(state.daily.top.map((e) => `${e.ip}:${e.port}#${e.colo}`).join("\n"));
+});
+document.querySelectorAll("[data-copy]").forEach((button) =>
+  button.addEventListener("click", () => copy($(button.dataset.copy).textContent)));
+
+const form = $("settings");
+form.addEventListener("input", () => { settingsDirty = true; });
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const e = form.elements;
+  const patch = {
+    sub_url: e.sub_url.value.trim(),
+    auto_daily: e.auto_daily.checked,
+    auto_time: e.auto_time.value,
+    pool_strategy: e.pool_strategy.value,
+    daily_segments: Number(e.daily_segments.value),
+    daily_test: Number(e.daily_test.value),
+    daily_top: Number(e.daily_top.value),
+    daily_concurrency: Number(e.daily_concurrency.value),
+    scan_timeout_secs: Number(e.scan_timeout_secs.value),
+  };
+  if (await action("/api/settings", patch)) settingsDirty = false;
+});
+
+refresh();
+</script>
+</body>
+</html>

@@ -73,6 +73,8 @@ Get the latest build from [**Releases**](https://github.com/wintopic/CF-BEST/rel
 | --- | --- | --- |
 | Windows 10 / 11 (x64) | `CFBest-<version>-windows-x64.exe` | Portable, just run it |
 | macOS 11+ (Apple silicon / Intel) | `CFBest-<version>-macos-universal.dmg` | Drag **CF Best** into Applications |
+| Linux server (x64 / ARM64) | `cfbest-cli-<version>-linux-x64` / `-linux-arm64` | Headless, managed in a browser, see [NAS and Linux](#nas-and-linux-web-ui) |
+| NAS (Docker) | Image `ghcr.io/wintopic/cf-best`, or `cf-best-docker-<version>-linux-*.tar.gz` | Synology, ZSpace, fnOS and others, see [NAS and Linux](#nas-and-linux-web-ui) |
 
 Every release ships a `SHA256SUMS.txt` for verifying downloads.
 
@@ -93,6 +95,27 @@ xattr -dr com.apple.quarantine "/Applications/CF Best.app"
 The executable isn't code-signed, so SmartScreen warns about new files. Click **More info → Run anyway**. You can check the file against `SHA256SUMS.txt` first.
 
 </details>
+
+## NAS and Linux (web UI)
+
+The headless build runs as a long-lived service on a NAS or Linux server and is managed from a browser: it runs the daily optimization on a schedule, and phones and computers on your LAN add its subscription URL to their proxy client, picking up the newest nodes after each run. The web UI can start or stop a run, set the schedule and parameters, take a VLESS subscription link, and show the top results, history and a live log.
+
+```bash
+docker run -d --name cf-best --restart unless-stopped   -p 27208:27208 -v ./cf-best:/data   -e TZ=Asia/Shanghai -e CFBEST_PASSWORD=change-me   ghcr.io/wintopic/cf-best:latest
+```
+
+Or use [`docker-compose.yml`](docker-compose.yml), then open `http://<NAS IP>:27208`. Images are published for x64 and ARM64; if your NAS can't reach ghcr.io, import the `cf-best-docker-*.tar.gz` file from Releases in its Docker UI. On a plain Linux server, run the static binary: `./cfbest-cli-<version>-linux-x64 serve`.
+
+| Environment | Flag | Meaning |
+| --- | --- | --- |
+| `CFBEST_PASSWORD` | `--password` | Web UI password (unset by default; **set it if the port is reachable from the internet**) |
+| `CFBEST_LISTEN` | `--listen` | Listen address, default `0.0.0.0:27208` |
+| `CFBEST_ALLOWED_HOSTS` | `--allow-host` | Extra host names accepted when no password is set (comma-separated) |
+| `CFBEST_DATA_DIR` | | Data directory, `/data` in the image |
+| `CFBEST_SUB_URL` | | VLESS subscription link written at startup |
+| `TZ` | | Time zone for the daily schedule |
+
+Subscription URLs (`http://<IP>:27208/<token>/daily`) carry a random token that acts as the credential, so proxy clients need no password; the token can be rotated from the web UI. Without a password, the web UI only answers to IP addresses, bare host names and LAN suffixes such as `.local` / `.lan`, which blocks DNS-rebinding attacks from web pages.
 
 ## Quick start
 
