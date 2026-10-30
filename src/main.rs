@@ -24,6 +24,7 @@ fn main() {
     let paths = AppPaths::discover();
     storage::init_logging(&paths);
     storage::install_panic_hook();
+    crate::core::sys::raise_fd_limit();
     // 更新后由旧版本拉起：旧进程退出、释放单实例锁之前先等着。
     let after_update = updater::launched_after_update();
     let lock_wait = std::time::Duration::from_secs(if after_update { 20 } else { 0 });

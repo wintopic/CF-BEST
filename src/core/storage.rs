@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use chrono::Local;
@@ -13,6 +14,8 @@ use crate::core::model::{
 };
 
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
+/// 日志是否同时写到控制台；无窗口模式用 `--quiet` 关掉。
+static CONSOLE_LOG: AtomicBool = AtomicBool::new(true);
 
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -108,6 +111,13 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// 是否把日志同时写到控制台。图形界面保持默认（写），无窗口模式可用 `--quiet` 关掉。
+/// 只有 `cfbest-cli` 会调用，图形界面固定用默认值。
+#[allow(dead_code)]
+pub fn set_console_logging(enabled: bool) {
+    CONSOLE_LOG.store(enabled, Ordering::Relaxed);
+}
+
 pub fn log_line(message: &str) {
     let stamp = Local::now().format("%Y-%m-%d %H:%M:%S");
     if let Some(file) = LOG_FILE.get()
@@ -116,7 +126,9 @@ pub fn log_line(message: &str) {
         let _ = writeln!(file, "[{stamp}] {message}");
         let _ = file.flush();
     }
-    eprintln!("[{stamp}] {message}");
+    if CONSOLE_LOG.load(Ordering::Relaxed) {
+        eprintln!("[{stamp}] {message}");
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {

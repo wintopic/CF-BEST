@@ -35,6 +35,8 @@ yaml-rust2 = { version = "0.13", default-features = false }
 # macOS：着色器在启动时编译，构建不依赖 Xcode 的 Metal 工具链。
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+# macOS：启动时提升 RLIMIT_NOFILE，避免高并发扫描触发 EMFILE。
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

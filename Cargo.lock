@@ -809,6 +809,7 @@ dependencies = [
  "chrono",
  "embed-resource",
  "gpui",
+ "libc",
  "rand 0.9.5",
  "raw-window-handle",
  "ring",

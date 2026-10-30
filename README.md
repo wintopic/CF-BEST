@@ -211,11 +211,42 @@ cargo test --locked -- --ignored   # 需要联网的测试：边缘 trace、测�
 
 </details>
 
+## 无窗口模式（cfbest-cli）
+
+除图形界面外，仓库还带一个无窗口的命令行入口，适合放在常开机器上用计划任务 / launchd / systemd 定时跑：
+
+```bash
+cargo run --release --bin cfbest-cli -- --segments 20 --test 20 --top 5
+```
+
+它与图形界面共用同一份数据目录（设置、段池、订阅缓存、每日进度），两个入口可以交替使用：界面里配好订阅链接，命令行就能直接跑隧道验证。
+
+| 选项 | 说明 |
+| --- | --- |
+| `--segments <N>` | 本轮扫描的 /24 段数（默认取设置） |
+| `--test <N>` | 进入测速的 IP 数（默认取设置） |
+| `--top <N>` | 最终保留的 Top N（默认取设置） |
+| `--concurrency <N>` | 扫描并发（默认取设置） |
+| `--out <PATH>` | 结果另存到文件 |
+| `--json` | 以 JSON 输出到标准输出 |
+| `--quiet` | 不打印过程日志 |
+| `--reset` | 忽略上次进度，从段池第一段重新开始 |
+
+Top 结果写标准输出、过程日志写标准错误，便于重定向与管道：
+
+```bash
+cfbest-cli --quiet > top.txt 2>> run.log
+cfbest-cli --json --quiet | jq '.top[0]'
+```
+
+退出码：`0` 有结果，`3` 本轮无可用 IP，`1` 运行出错，`2` 参数错误。
+
 ## 项目结构
 
 ```
 src/
   main.rs            窗口创建、快捷键与菜单
+  bin/cfbest-cli.rs  无窗口的命令行入口，复用 core 的全部逻辑
   core/              与界面无关的业务逻辑：扫描、测速、验证、段池、每日优选、存储、统计
   app/               应用状态与各页面：侧栏、标题栏、事件处理、操作回调、*_page.rs
   ui/                通用组件：按钮、输入框、提示气泡、图表
