@@ -79,7 +79,7 @@ fn key_for_octets(octets: [u8; 3]) -> String {
     format!("{}.{}.{}.0/24", octets[0], octets[1], octets[2])
 }
 
-fn key_for_ip(ip: &str) -> Option<String> {
+pub(crate) fn key_for_ip(ip: &str) -> Option<String> {
     let octets = ip.parse::<Ipv4Addr>().ok()?.octets();
     Some(key_for_octets([octets[0], octets[1], octets[2]]))
 }

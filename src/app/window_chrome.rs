@@ -11,6 +11,7 @@ impl AppState {
             JobKind::Verify => &self.verify_progress,
             JobKind::Daily => &self.daily_progress,
             JobKind::Probe => &self.probe_progress,
+            JobKind::Classify => &self.classify_progress,
             _ => return None,
         };
         (progress.total > 0).then(|| progress.fraction())

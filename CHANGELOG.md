@@ -2,10 +2,13 @@
 
 本项目的所有重要改动都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-10-31
 
 ### 新增
 
+- 锁定出口区域：按本机网络实际落到的 Cloudflare 机房，把段池里的段划分到国家 / 地区（香港、日本、美国……）。锁定后，自动优选只在落在这些区域的段中轮转（单独记录进度），测速、验证后只保留出口在锁定区域的 IP；也可以用机房代码（如 `SJC`、`NRT`）精确锁定。「段池优化」页新增「出口区域」卡片，可划分新段、重新划分全部并查看各国家 / 地区的段数；首次锁定时自动划分一次，之后每轮优选与手动扫描都会顺便更新。
+- 结果表显示机房所在城市与国家 / 地区（内置 Cloudflare 全部 309 个机房），扫描结果可按出口区域筛选，「下一步：测速」只送筛选出的地址。
+- 无窗口版同样支持：网页上可锁定区域、划分段池并查看分布，`cfbest-cli --region HK,JP` 为单次运行指定区域。
 - NAS 与 Linux 支持：无窗口版 `cfbest-cli serve` 常驻运行局域网服务，在浏览器里管理每日定时优选、参数与订阅链接，查看结果、历史与实时日志；局域网里的代理软件直接添加它提供的订阅地址。提供 Docker 镜像（`ghcr.io/wintopic/cf-best`，x64 / ARM64，适用于群晖、极空间、飞牛等 NAS）、可离线导入的镜像文件与静态链接的 Linux 可执行文件。
 - `cfbest-cli` 单次运行模式：运行一轮自动优选后退出，结果输出到标准输出（感谢 @superdadhobo）。
 
@@ -41,5 +44,6 @@
 - 托盘常驻、任务栏进度、开机自启（Windows）；macOS universal 安装包。
 - 4 种主题风格 × 浅色 / 深色 / 跟随系统，界面缩放，全键盘操作。
 
+[0.3.0]: https://github.com/wintopic/CF-BEST/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wintopic/CF-BEST/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wintopic/CF-BEST/releases/tag/v0.1.0

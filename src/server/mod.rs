@@ -23,9 +23,10 @@ use crate::core::model::{
     VlessNode,
 };
 use crate::core::proxy::{Endpoint, ProxyFeed};
+use crate::core::region::{self, ClassifyConfig, CountryCount, RegionLock};
 use crate::core::storage::{self, AppPaths};
 use crate::core::sub_server::{self, FeedSource};
-use crate::core::{http, verify};
+use crate::core::{colo, http, verify};
 
 /// 默认端口：与图形界面的本机订阅服务（27207）错开，两者可以在同一台机器上共存。
 pub const DEFAULT_PORT: u16 = 27208;
@@ -77,6 +78,32 @@ struct SubscriptionView {
     error: String,
 }
 
+/// 段池的出口区域划分概况，在划分或优选结束后重新计算（段池可能很大，不在每次轮询时算）。
+#[derive(Default)]
+struct RegionView {
+    pool: usize,
+    /// 有划分记录的段数，以及其中有响应的段数。
+    known: usize,
+    alive: usize,
+    classified: String,
+    countries: Vec<CountryCount>,
+}
+
+impl RegionView {
+    fn load(paths: &AppPaths) -> Self {
+        let pool = storage::load_pool(paths);
+        let regions = storage::load_segment_regions(paths);
+        let (known, alive) = regions.coverage(&pool);
+        Self {
+            pool: pool.len(),
+            known,
+            alive,
+            classified: regions.classified.clone(),
+            countries: regions.countries(&pool),
+        }
+    }
+}
+
 struct Inner {
     settings: Settings,
     daily_state: DailyState,
@@ -86,6 +113,7 @@ struct Inner {
     cancel: Option<Arc<AtomicBool>>,
     /// 上一次运行结束时的提示。
     last_result: String,
+    regions: RegionView,
 }
 
 pub struct Service {
@@ -162,6 +190,7 @@ impl Service {
             job: None,
             cancel: None,
             last_result: String::new(),
+            regions: RegionView::load(&paths),
         };
         Self {
             paths,
@@ -359,27 +388,116 @@ impl Service {
         }
     }
 
+    /// 占用任务槽：每日优选与区域划分同一时间只运行一个。
+    fn begin_job(&self, trigger: &'static str) -> Result<Arc<AtomicBool>, String> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut inner = self.lock();
+        if let Some(job) = &inner.job {
+            return Err(format!("正在{}，请等它结束或先停止", job.trigger_label()));
+        }
+        inner.job = Some(JobView {
+            trigger,
+            started: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            stage: "准备".into(),
+            detail: String::new(),
+            done: 0,
+            total: 0,
+            label: String::new(),
+        });
+        inner.cancel = Some(cancel.clone());
+        Ok(cancel)
+    }
+
     /// 在后台开始一轮每日优选；已有任务在运行时返回错误。
     fn start_daily(self: &Arc<Self>, trigger: &'static str) -> Result<(), String> {
-        let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut inner = self.lock();
-            if inner.job.is_some() {
-                return Err("已有一轮优选在运行".into());
-            }
-            inner.job = Some(JobView {
-                trigger,
-                started: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                stage: "准备".into(),
-                detail: String::new(),
-                done: 0,
-                total: 0,
-                label: String::new(),
-            });
-            inner.cancel = Some(cancel.clone());
-        }
+        let cancel = self.begin_job(trigger)?;
         tokio::spawn(self.clone().run_daily(trigger, cancel));
         Ok(())
+    }
+
+    /// 在后台划分段池的出口区域；`force` 为 true 时重新划分全部段，否则只划分新段。
+    fn start_classify(self: &Arc<Self>, force: bool) -> Result<(), String> {
+        if storage::load_pool(&self.paths).is_empty() {
+            return Err("段池为空：先运行一轮优选，会自动生成段池".into());
+        }
+        let cancel = self.begin_job(CLASSIFY_TRIGGER)?;
+        tokio::spawn(self.clone().run_classify(force, cancel));
+        Ok(())
+    }
+
+    async fn run_classify(self: Arc<Self>, force: bool, cancel: Arc<AtomicBool>) {
+        let pool = storage::load_pool(&self.paths);
+        let mut regions = storage::load_segment_regions(&self.paths);
+        let segments = regions.pending(&pool, force);
+        let message = if segments.is_empty() {
+            "段池里的段都已划分过；网络环境变了可以选「重新划分全部」".to_string()
+        } else {
+            storage::log_line(&format!(
+                "开始划分出口区域：{} 段（{}）",
+                segments.len(),
+                if force {
+                    "全部重新划分"
+                } else {
+                    "只划分新段"
+                }
+            ));
+            self.set_stage(
+                "区域划分",
+                &format!("探测 {} 个段在本机网络下落到的机房", segments.len()),
+            );
+            let config = {
+                let inner = self.lock();
+                ClassifyConfig {
+                    segments,
+                    concurrency: inner.settings.daily_concurrency.clamp(1, 1000) as usize,
+                    timeout: daily::classify_timeout(Duration::from_secs_f64(
+                        inner.settings.scan_timeout_secs.clamp(0.5, 30.0),
+                    )),
+                }
+            };
+            let progress = self.clone();
+            let outcome = region::classify(&config, cancel, move |step| {
+                if let Some(job) = &mut progress.lock().job {
+                    job.done = step.probed;
+                    job.total = step.total;
+                    job.label = format!("已划分 {} / {} 段", step.resolved, step.segments);
+                }
+            })
+            .await;
+            let now = Local::now().format("%Y-%m-%d %H:%M").to_string();
+            region::apply_classification(&mut regions, &outcome, &now);
+            storage::save_segment_regions(&self.paths, &regions);
+            let countries = regions.countries(&pool);
+            let spread = if countries.is_empty() {
+                "都没有响应".to_string()
+            } else {
+                countries
+                    .iter()
+                    .take(6)
+                    .map(|country| format!("{} {} 段", country.name, country.segments))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            };
+            format!(
+                "区域划分{}：{} 段中 {} 段有响应，{:.0}s；段池分布：{spread}",
+                if outcome.stopped {
+                    "已停止"
+                } else {
+                    "完成"
+                },
+                outcome.segments.len(),
+                outcome.responded,
+                outcome.elapsed.as_secs_f64()
+            )
+        };
+        {
+            let mut inner = self.lock();
+            inner.job = None;
+            inner.cancel = None;
+            inner.last_result = message.clone();
+            inner.regions = RegionView::load(&self.paths);
+        }
+        storage::log_line(&message);
     }
 
     fn stop_daily(&self) -> bool {
@@ -417,6 +535,7 @@ impl Service {
                 node: verify::node_for_ips(&inner.subscription.nodes),
                 strategy: settings.pool_strategy.clone(),
                 scores: storage::load_segment_scores(&self.paths).records,
+                region_lock: RegionLock::parse(&settings.region_lock),
             }
         };
         let result = if cancel.load(Ordering::Relaxed) {
@@ -469,6 +588,8 @@ impl Service {
             let mut inner = self.lock();
             inner.job = None;
             inner.cancel = None;
+            // 优选会生成段池、更新扫描过的段的划分。
+            inner.regions = RegionView::load(&self.paths);
             let message = match result {
                 Ok(result) if result.stopped && result.summary.scanned == 0 => {
                     "每日优选已停止".to_string()
@@ -566,6 +687,15 @@ impl Service {
             }
             settings.sub_url = url.to_string();
         }
+        if let Some(value) = patch.get("region_lock") {
+            let entries: Vec<&str> = value
+                .as_array()
+                .ok_or("region_lock 应为字符串数组")?
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            settings.region_lock = RegionLock::parse(&entries).entries();
+        }
         if let Some(value) = patch.get("auto_daily") {
             settings.auto_daily = value.as_bool().ok_or("auto_daily 应为 true 或 false")?;
         }
@@ -594,9 +724,16 @@ impl Service {
             }
         }
         let sub_changed = settings.sub_url != inner.settings.sub_url;
+        let lock_changed = settings.region_lock != inner.settings.region_lock;
         inner.settings = settings;
         self.save_settings(&inner.settings);
         let mut message = "设置已保存".to_string();
+        if lock_changed {
+            message.push_str(&format!(
+                "；出口区域：{}",
+                RegionLock::parse(&inner.settings.region_lock).label()
+            ));
+        }
         if deferred {
             message.push_str(&format!(
                 "；今天的 {:02}:{:02} 已过，明天开始自动优选",
@@ -627,6 +764,39 @@ impl Service {
         let settings = &inner.settings;
         let template = template_node(&inner.subscription.nodes);
         let feed_count = tunnel_endpoints(&inner.daily_state.last_top).len();
+        let lock = RegionLock::parse(&settings.region_lock);
+        let state = &inner.daily_state;
+        let locked_progress = !lock.is_empty() && state.region_key == lock.key();
+        let top: Vec<_> = state
+            .last_top
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "ip": entry.ip,
+                    "port": entry.port,
+                    "colo": entry.colo,
+                    "place": colo::place(&entry.colo),
+                    "best_mbps": entry.best_mbps,
+                    "avg_mbps": entry.avg_mbps,
+                    "latency_ms": entry.latency_ms,
+                    "verification": entry.verification,
+                })
+            })
+            .collect();
+        let countries: Vec<_> = inner
+            .regions
+            .countries
+            .iter()
+            .map(|country| {
+                serde_json::json!({
+                    "code": country.code,
+                    "name": country.name,
+                    "region": colo::region_name(country.region),
+                    "segments": country.segments,
+                    "colos": country.colos,
+                })
+            })
+            .collect();
         let history: Vec<_> = inner
             .history
             .daily
@@ -660,6 +830,19 @@ impl Service {
                 "daily_concurrency": settings.daily_concurrency,
                 "scan_timeout_secs": settings.scan_timeout_secs,
                 "pool_strategy": crate::core::pool::normalize_strategy(&settings.pool_strategy),
+                "region_lock": lock.entries(),
+            },
+            "region_lock": {
+                "label": lock.label(),
+                "countries": lock.countries(),
+                "colos": lock.colos(),
+            },
+            "regions": {
+                "pool": inner.regions.pool,
+                "known": inner.regions.known,
+                "alive": inner.regions.alive,
+                "classified": inner.regions.classified,
+                "countries": countries,
             },
             "subscription": {
                 "count": inner.subscription.nodes.len(),
@@ -669,13 +852,14 @@ impl Service {
                 "node": template.as_ref().map(VlessNode::summary),
             },
             "daily": {
-                "last_run": inner.daily_state.last_run,
-                "top": inner.daily_state.last_top,
-                "verification": inner.daily_state.last_top.first()
+                "last_run": state.last_run,
+                "top": top,
+                "verification": state.last_top.first()
                     .map_or(DailyVerification::Unknown, |entry| entry.verification),
-                "cursor": inner.daily_state.cursor,
-                "round": inner.daily_state.round,
-                "pool_count": inner.daily_state.pool_count,
+                "locked": locked_progress,
+                "cursor": if locked_progress { state.region_cursor } else { state.cursor },
+                "round": if locked_progress { state.region_round } else { state.round },
+                "pool_count": if locked_progress { state.region_count } else { state.pool_count },
             },
             "feed": {
                 "token": settings.proxy_feed_token,
@@ -713,6 +897,19 @@ fn tunnel_endpoints(rows: &[DailyEntry]) -> Vec<Endpoint> {
             colo: entry.colo.clone(),
         })
         .collect()
+}
+
+/// 区域划分任务在任务槽里的触发方式，网页据此显示「区域划分」而不是「手动 / 定时」。
+const CLASSIFY_TRIGGER: &str = "区域划分";
+
+impl JobView {
+    fn trigger_label(&self) -> &'static str {
+        if self.trigger == CLASSIFY_TRIGGER {
+            "划分出口区域"
+        } else {
+            "运行优选"
+        }
+    }
 }
 
 fn new_token() -> String {

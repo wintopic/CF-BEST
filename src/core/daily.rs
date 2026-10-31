@@ -7,8 +7,10 @@ use chrono::Local;
 
 use crate::core::ip;
 use crate::core::model::{
-    DailyEntry, DailyState, DailySummary, DailyVerification, ScanHit, SegmentScore, VlessNode,
+    DailyEntry, DailyState, DailySummary, DailyVerification, ScanHit, SegmentRegions, SegmentScore,
+    VlessNode,
 };
+use crate::core::region::{self, ClassifyConfig, RegionLock};
 use crate::core::storage::AppPaths;
 use crate::core::verify::{self, VerifyEvent, VerifyTarget};
 use crate::core::{http, pool, scan, speed, storage};
@@ -25,6 +27,8 @@ pub struct DailyConfig {
     pub node: VlessNode,
     pub strategy: String,
     pub scores: Vec<SegmentScore>,
+    /// 锁定的出口区域；为空时不筛选。
+    pub region_lock: RegionLock,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +95,25 @@ async fn ensure_pool(
     Ok(segments)
 }
 
+/// 区域划分用的握手超时：大多数探测落在没有响应的地址上，超时短一些划分得快。
+pub fn classify_timeout(scan_timeout: Duration) -> Duration {
+    scan_timeout.clamp(Duration::from_secs(1), Duration::from_secs(3))
+}
+
+/// 段池里各国家 / 地区的段数，用于提示，例如「美国 12 段、香港 3 段」。
+fn distribution(regions: &SegmentRegions, pool: &[String]) -> String {
+    let countries = regions.countries(pool);
+    if countries.is_empty() {
+        return "已划分的段都没有响应".to_string();
+    }
+    countries
+        .iter()
+        .take(6)
+        .map(|country| format!("{} {} 段", country.name, country.segments))
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
 async fn sleep_cancel(seconds: f64, cancel: &Arc<AtomicBool>) {
     let deadline = Instant::now() + Duration::from_secs_f64(seconds);
     while Instant::now() < deadline && !cancel.load(Ordering::Relaxed) {
@@ -142,25 +165,108 @@ where
     }
 
     let strategy = pool::normalize_strategy(&config.strategy);
-    let ordered = pool::ordered_pool(&pool, strategy, &config.scores);
-    let pool_len = ordered.len();
-    if pool_len == 0 {
+    let mut ordered = pool::ordered_pool(&pool, strategy, &config.scores);
+    if ordered.is_empty() {
         bail!("段池为空");
     }
-    let cursor = pool::normalize_cursor(config.state.cursor, pool_len);
+
+    let lock = config.region_lock.clone();
+    let mut regions = storage::load_segment_regions(&config.paths);
+    if !lock.is_empty() {
+        if regions.coverage(&ordered).0 == 0 {
+            emit(DailyEvent::Stage {
+                stage: "区域划分".into(),
+                detail: format!("探测 {} 个段在本机网络下落到的机房", ordered.len()),
+            });
+            log(
+                &mut emit,
+                format!(
+                    "段池还没有划分出口区域，先探测 {} 个段落到的机房（首次锁定区域时进行一次）…",
+                    ordered.len()
+                ),
+            );
+            let classify_config = ClassifyConfig {
+                segments: ordered.clone(),
+                concurrency: config.concurrency,
+                timeout: classify_timeout(config.scan_timeout),
+            };
+            let outcome = region::classify(&classify_config, cancel.clone(), |progress| {
+                emit(DailyEvent::Progress {
+                    stage: "区域划分".into(),
+                    done: progress.probed,
+                    total: progress.total,
+                    label: format!("已划分 {} / {} 段", progress.resolved, progress.segments),
+                });
+            })
+            .await;
+            let now = Local::now().format("%Y-%m-%d %H:%M").to_string();
+            region::apply_classification(&mut regions, &outcome, &now);
+            storage::save_segment_regions(&config.paths, &regions);
+            log(
+                &mut emit,
+                format!(
+                    "区域划分{}：{} 段中 {} 段有响应，耗时 {:.0}s",
+                    if outcome.stopped {
+                        "已停止"
+                    } else {
+                        "完成"
+                    },
+                    outcome.segments.len(),
+                    outcome.responded,
+                    outcome.elapsed.as_secs_f64()
+                ),
+            );
+            if outcome.stopped || cancel.load(Ordering::Relaxed) {
+                result.stopped = true;
+                result.elapsed = started.elapsed();
+                return Ok(result);
+            }
+        }
+        let matched = regions.matching(&ordered, &lock);
+        if matched.is_empty() {
+            bail!(
+                "段池里没有落在「{}」的段（本机网络下的分布：{}）；可在段池页重新划分区域，或换用其他段池来源",
+                lock.label(),
+                distribution(&regions, &ordered)
+            );
+        }
+        log(
+            &mut emit,
+            format!(
+                "锁定出口区域：{}，段池 {} 段中 {} 段落在该区域",
+                lock.label(),
+                ordered.len(),
+                matched.len()
+            ),
+        );
+        ordered = matched;
+    }
+
+    // 锁定区域时在锁定的段里单独轮转，不影响不锁定时的进度。
+    let lock_key = lock.key();
+    let (start_cursor, start_round) = if lock.is_empty() {
+        (config.state.cursor, config.state.round)
+    } else if config.state.region_key == lock_key {
+        (config.state.region_cursor, config.state.region_round)
+    } else {
+        (0, 1)
+    };
+    let start_round = start_round.max(1);
+    let pool_len = ordered.len();
+    let cursor = pool::normalize_cursor(start_cursor, pool_len);
     let batch_len = pool::batch_size(config.segments, pool_len);
     let batch = pool::batch_segments(&ordered, cursor, batch_len);
     let positions = pool::batch_positions(cursor, batch_len, pool_len);
     let (next_cursor, wrapped) = pool::advance(cursor, batch_len, pool_len);
     let next_round = if wrapped {
-        config.state.round + 1
+        start_round + 1
     } else {
-        config.state.round
+        start_round
     };
 
     emit(DailyEvent::Stage {
         stage: "扫描".into(),
-        detail: format!("{positions}（第 {} 轮）", config.state.round.max(1)),
+        detail: format!("{positions}（第 {start_round} 轮）"),
     });
     log(
         &mut emit,
@@ -250,6 +356,15 @@ where
         return Ok(result);
     }
 
+    // 整段扫描过的段顺便更新出口区域划分，锁定区域时下次取段更准。
+    regions.record_scan(
+        &batch,
+        &std::collections::HashMap::new(),
+        &hits,
+        &Local::now().format("%Y-%m-%d %H:%M").to_string(),
+    );
+    storage::save_segment_regions(&config.paths, &regions);
+
     if !hits.is_empty() {
         match storage::write_daily_hits(&config.paths, &hits) {
             Ok(path) => {
@@ -263,10 +378,35 @@ where
     let mut advance_state = true;
     let mut scored: Vec<(String, u16, String, f64, f64, f64)> = Vec::new();
 
+    let hits: Vec<ScanHit> = if lock.is_empty() {
+        hits
+    } else {
+        let total = hits.len();
+        let kept: Vec<ScanHit> = hits
+            .into_iter()
+            .filter(|hit| lock.matches(&hit.colo))
+            .collect();
+        if total > 0 {
+            log(
+                &mut emit,
+                format!(
+                    "锁定出口区域：命中 {total} 个，其中 {} 个落在{}",
+                    kept.len(),
+                    lock.label()
+                ),
+            );
+        }
+        kept
+    };
+
     if hits.is_empty() {
         log(
             &mut emit,
-            "本轮没有可连通的 Cloudflare 节点，直接进入下一批".into(),
+            if lock.is_empty() || result.summary.hits == 0 {
+                "本轮没有可连通的 Cloudflare 节点，直接进入下一批".into()
+            } else {
+                "本轮命中的地址都不在锁定区域，直接进入下一批".into()
+            },
         );
     } else {
         let candidates: Vec<&ScanHit> = hits.iter().take(config.test.max(1)).collect();
@@ -412,11 +552,20 @@ where
                     record.detail
                 ),
             );
-            if record.ok {
+            let exit_colo = record.colo.clone().unwrap_or_else(|| colo.clone());
+            if record.ok && !lock.matches(&exit_colo) {
+                log(
+                    &mut emit,
+                    format!(
+                        "[验证] {ip} 出口机房 {exit_colo} 不在锁定区域（{}），不计入结果",
+                        lock.label()
+                    ),
+                );
+            } else if record.ok {
                 final_rows.push(DailyEntry {
                     ip: ip.clone(),
                     port: *port,
-                    colo: record.colo.unwrap_or_else(|| colo.clone()),
+                    colo: exit_colo,
                     best_mbps: *best,
                     avg_mbps: *avg,
                     latency_ms: *latency_ms,
@@ -451,12 +600,19 @@ where
     result.summary.round = if advance_state {
         next_round
     } else {
-        config.state.round
+        start_round
     };
-    result.state.cursor = result.summary.cursor;
-    result.state.round = result.summary.round;
+    if lock.is_empty() {
+        result.state.cursor = result.summary.cursor;
+        result.state.round = result.summary.round;
+        result.state.pool_count = pool_len;
+    } else {
+        result.state.region_key = lock_key;
+        result.state.region_cursor = result.summary.cursor;
+        result.state.region_round = result.summary.round;
+        result.state.region_count = pool_len;
+    }
     result.state.strategy = strategy.to_string();
-    result.state.pool_count = pool_len;
     if advance_state {
         result.state.last_run = now.format("%Y-%m-%d %H:%M").to_string();
         result.state.last_top = final_rows.clone();
@@ -582,6 +738,7 @@ mod tests {
                     },
                     strategy: "sequential".into(),
                     scores: Vec::new(),
+                    region_lock: RegionLock::default(),
                 },
             }
         }
@@ -592,6 +749,7 @@ mod tests {
             let paths = &self.config.paths;
             let _ = fs::remove_file(&paths.pool);
             let _ = fs::remove_file(&paths.daily_state);
+            let _ = fs::remove_file(paths.root.join("segment_regions.json"));
             let _ = fs::remove_dir(&paths.root);
         }
     }
@@ -667,5 +825,57 @@ mod tests {
         assert_eq!(result.summary.verification, DailyVerification::Tunnel);
         assert_eq!(result.summary.scanned, 1);
         assert!(!result.stopped);
+    }
+
+    #[tokio::test]
+    async fn region_lock_rotates_only_through_matching_segments() {
+        let mut fixture = Fixture::new("tls", "");
+        let paths = fixture.config.paths.clone();
+        storage::save_pool(&paths, &["127.0.0.0/24".into(), "127.0.1.0/24".into()]).unwrap();
+        let mut regions = SegmentRegions::default();
+        regions.learn(
+            &[
+                ScanHit::new("127.0.0.9".into(), 443, "HKG".into(), 10.0),
+                ScanHit::new("127.0.1.9".into(), 443, "LAX".into(), 10.0),
+            ],
+            "earlier",
+        );
+        storage::save_segment_regions(&paths, &regions);
+        fixture.config.region_lock = RegionLock::parse(&["HK"]);
+
+        let mut stages = Vec::new();
+        let result = execute(
+            fixture.config.clone(),
+            Arc::new(AtomicBool::new(false)),
+            |event| {
+                if let DailyEvent::Stage { stage, .. } = event {
+                    stages.push(stage);
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        // 只扫描落在香港的那一段，已有划分时不再重新划分。
+        assert!(!stages.iter().any(|stage| stage == "区域划分"));
+        assert_eq!(result.summary.segments, ["127.0.0.0/24"]);
+        assert_eq!(result.state.region_key, "HK");
+        assert_eq!(result.state.region_count, 1);
+        assert_eq!(result.state.region_round, 2);
+        // 不锁定时的轮转进度不受影响。
+        assert_eq!((result.state.cursor, result.state.round), (0, 1));
+
+        // 这一段整段扫描后没有响应，划分记录随之更新，再锁定香港就没有可用的段。
+        fixture.config.state = result.state;
+        let error = execute(
+            fixture.config.clone(),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
+        .expect_err("锁定的区域里没有段时应提示");
+        let message = error.to_string();
+        assert!(message.contains("没有落在「香港」"), "{message}");
+        assert!(message.contains("美国 1 段"), "{message}");
     }
 }

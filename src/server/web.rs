@@ -299,6 +299,17 @@ async fn route(service: &Arc<Service>, request: &Request) -> Response {
             Ok(()) => Response::ok("已开始一轮优选"),
             Err(err) => Response::error(409, err),
         },
+        ("POST", "/api/regions/classify") => {
+            let force = request
+                .json()
+                .ok()
+                .and_then(|body| body.get("force")?.as_bool())
+                .unwrap_or(false);
+            match service.start_classify(force) {
+                Ok(()) => Response::ok("已开始划分出口区域"),
+                Err(err) => Response::error(409, err),
+            }
+        }
         ("POST", "/api/stop") => {
             if service.stop_daily() {
                 Response::ok("正在停止…")

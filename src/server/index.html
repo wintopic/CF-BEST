@@ -81,6 +81,20 @@
                   border-radius: 7px; padding: 6px 9px; min-width: 0; }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
   input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip-group { width: 100%; font-size: 11px; color: var(--muted); margin-top: 4px; }
+  button.chip { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--bg);
+                border: 1px solid var(--line); color: var(--text); }
+  button.chip:hover { border-color: var(--accent); background: var(--bg); }
+  button.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  button.chip .n { color: var(--muted); margin-left: 4px; }
+  .lock-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+  .lock-head b { color: var(--accent); font-weight: 600; }
+  .dist { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; font-size: 13px; }
+  .dist .meter { height: 6px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+  .dist .meter div { height: 100%; background: var(--accent); }
+  .dist .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .dist .locked { color: var(--accent); font-weight: 600; }
   .logs { font-family: var(--mono); font-size: 12px; background: var(--bg); border-radius: 8px; padding: 8px 10px;
           height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
   .logs .t { color: var(--muted); }
@@ -131,11 +145,24 @@
       </h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>#</th><th>IP</th><th>机房</th><th class="num">最快</th><th class="num">均值</th><th class="num">延迟</th><th>验证</th></tr></thead>
+          <thead><tr><th>#</th><th>IP</th><th>机房</th><th>位置</th><th class="num">最快</th><th class="num">均值</th><th class="num">延迟</th><th>验证</th></tr></thead>
           <tbody id="top-body"></tbody>
         </table>
       </div>
       <div class="empty" id="top-empty">暂无结果：点「立即运行」开始第一轮优选</div>
+    </section>
+
+    <section class="card">
+      <h2>出口区域 <span class="sub" id="region-status"></span>
+        <span class="actions">
+          <button class="ghost small" id="classify-new">划分新段</button>
+          <button class="ghost small" id="classify-all">重新划分全部</button>
+        </span>
+      </h2>
+      <div class="notice amber hidden" id="region-notice"></div>
+      <div class="dist" id="region-dist"></div>
+      <p class="small muted">按本机网络实际落到的 Cloudflare 机房给段池里的段划分国家 / 地区；Workers / Pages 节点的出口就在这个机房。
+        在「设置」里锁定区域后，优选只扫描落在这些区域的段，结果也只保留这些区域的 IP。</p>
     </section>
 
     <section class="card">
@@ -165,6 +192,13 @@
       <form class="settings" id="settings" autocomplete="off">
         <label class="wide">VLESS 订阅链接（用于隧道验证与生成订阅，可留空）
           <input name="sub_url" type="url" placeholder="https://…">
+        </label>
+        <div class="wide">
+          <div class="lock-head"><span>锁定出口区域（不选为不限）</span><b id="lock-label"></b></div>
+          <div class="chips" id="lock-chips"></div>
+        </div>
+        <label class="wide">其他区域：国家 / 地区代码或机房代码，逗号分隔
+          <input name="lock_extra" placeholder="例如 SG, NRT, SJC">
         </label>
         <label class="check wide"><input name="auto_daily" type="checkbox"> 每天自动优选</label>
         <label>运行时间<input name="auto_time" type="time" required></label>
@@ -305,12 +339,13 @@ function render(s) {
 
   const d = s.daily;
   $("pool-progress").textContent = d.pool_count ? `${d.cursor + 1} / ${d.pool_count} · 第 ${d.round} 轮` : "—";
+  $("pool-progress").previousElementSibling.textContent = d.locked ? "锁定区域进度" : "段池进度";
   $("sub-count").textContent = s.subscription.loading ? "载入中…" : (s.subscription.count ? `${s.subscription.count} 个` : "无");
   $("verify-kind").textContent = s.subscription.node ? "隧道验证" : "TLS 基础";
 
   $("top-time").textContent = d.last_run ? `${d.last_run} · ${VERIFY[d.verification] || ""}` : "";
   fill($("top-body"), d.top.map((e, i) => [
-    cell(i + 1), cell(e.port === 443 ? e.ip : `${e.ip}:${e.port}`, "mono"), cell(e.colo),
+    cell(i + 1), cell(e.port === 443 ? e.ip : `${e.ip}:${e.port}`, "mono"), cell(e.colo), cell(e.place || "—"),
     cell(e.best_mbps.toFixed(1) + " Mbps", "num"), cell(e.avg_mbps.toFixed(1), "num"),
     cell(Math.round(e.latency_ms) + " ms", "num"), cell(VERIFY[e.verification] || "—"),
   ]), $("top-empty"));
@@ -343,7 +378,9 @@ function render(s) {
   ]), $("history-empty"));
   $("data-dir").textContent = `数据目录：${s.data_dir}`;
 
+  renderRegions(s);
   if (!settingsDirty) fillSettings(s.settings);
+  renderLockChips(s);
 
   const logs = $("logs");
   const atBottom = logs.scrollHeight - logs.scrollTop - logs.clientHeight < 30;
@@ -367,6 +404,83 @@ function fillSettings(settings) {
     if (!input) continue;
     if (input.type === "checkbox") input.checked = value; else input.value = value;
   }
+  // 段池里出现过的国家 / 地区显示为可点选的标签，其余锁定项（机房代码等）放进输入框。
+  const known = new Set(state.regions.countries.map((c) => c.code));
+  lockSelected = new Set(settings.region_lock.filter((code) => known.has(code)));
+  form.elements.lock_extra.value = settings.region_lock.filter((code) => !known.has(code)).join(", ");
+}
+
+let lockSelected = new Set();
+
+function renderLockChips(s) {
+  const chips = [];
+  let group = "";
+  for (const c of s.regions.countries) {
+    if (c.region !== group) {
+      group = c.region;
+      const label = document.createElement("span");
+      label.className = "chip-group";
+      label.textContent = group;
+      chips.push(label);
+    }
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip" + (lockSelected.has(c.code) ? " on" : "");
+    chip.title = c.colos.length ? `机房：${c.colos.join("、")}` : "段池里暂无落在这里的段";
+    chip.append(c.name);
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = `${c.segments} 段`;
+    chip.append(n);
+    chip.addEventListener("click", () => {
+      if (lockSelected.has(c.code)) lockSelected.delete(c.code); else lockSelected.add(c.code);
+      settingsDirty = true;
+      renderLockChips(state);
+    });
+    chips.push(chip);
+  }
+  if (!chips.length) {
+    const hint = document.createElement("span");
+    hint.className = "small muted";
+    hint.textContent = "先在「出口区域」里划分段池，这里会列出可选的国家 / 地区；也可以直接在下方填写代码。";
+    chips.push(hint);
+  }
+  $("lock-chips").replaceChildren(...chips);
+  $("lock-label").textContent = settingsDirty ? "（未保存）" : s.region_lock.label;
+}
+
+function renderRegions(s) {
+  const r = s.regions;
+  $("region-status").textContent = r.pool
+    ? `段池 ${r.pool} 段 · 已划分 ${r.known} 段 · 有响应 ${r.alive} 段${r.classified ? ` · ${r.classified}` : ""}`
+    : "段池为空";
+  const notice = $("region-notice");
+  let text = "";
+  if (!r.known) text = "还没有划分：点「划分新段」按本机网络探测每个段落到的机房。段较多时需要几分钟，可随时停止。";
+  else if (r.known < r.pool) text = `还有 ${r.pool - r.known} 段没有划分，点「划分新段」补上。`;
+  notice.textContent = text;
+  notice.classList.toggle("hidden", !text);
+  const locked = new Set(s.region_lock.countries);
+  const max = Math.max(1, ...r.countries.map((c) => c.segments));
+  const rows = [];
+  for (const c of r.countries) {
+    const name = document.createElement("span");
+    name.textContent = `${c.name}`;
+    if (locked.has(c.code)) name.className = "locked";
+    const meter = document.createElement("div");
+    meter.className = "meter";
+    const fillBar = document.createElement("div");
+    fillBar.style.width = `${100 * c.segments / max}%`;
+    meter.append(fillBar);
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = `${c.segments} 段 · ${c.colos.slice(0, 3).join(" ")}${c.colos.length > 3 ? " …" : ""}`;
+    rows.push(name, meter, meta);
+  }
+  $("region-dist").replaceChildren(...rows);
+  const busy = !!s.job;
+  $("classify-new").disabled = busy || !r.pool;
+  $("classify-all").disabled = busy || !r.pool;
 }
 
 async function refresh() {
@@ -402,6 +516,10 @@ $("logout").addEventListener("click", async () => { await action("/api/logout");
 $("run").addEventListener("click", () => action("/api/run"));
 $("stop").addEventListener("click", () => action("/api/stop"));
 $("refresh-sub").addEventListener("click", () => action("/api/subscription/refresh"));
+$("classify-new").addEventListener("click", () => action("/api/regions/classify", { force: false }));
+$("classify-all").addEventListener("click", () => {
+  if (confirm("按当前网络重新探测段池里的全部段？段较多时需要几分钟。")) action("/api/regions/classify", { force: true });
+});
 $("reset-token").addEventListener("click", () => {
   if (confirm("更换后，代理软件里已添加的订阅地址会失效，需要重新添加。确定更换？")) action("/api/token/reset");
 });
@@ -427,6 +545,7 @@ form.addEventListener("submit", async (event) => {
     daily_top: Number(e.daily_top.value),
     daily_concurrency: Number(e.daily_concurrency.value),
     scan_timeout_secs: Number(e.scan_timeout_secs.value),
+    region_lock: [...lockSelected, ...e.lock_extra.value.split(/[\s,，、;；]+/).filter(Boolean)],
   };
   if (await action("/api/settings", patch)) settingsDirty = false;
 });

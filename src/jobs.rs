@@ -12,6 +12,7 @@ use crate::core::http;
 use crate::core::ip;
 use crate::core::model::{ScanHit, SpeedRecord, VerifyRecord, VlessNode};
 use crate::core::probe::{self, ProbeConfig, ProbeOutcome};
+use crate::core::region::{self, ClassifyConfig};
 use crate::core::scan::{self, ScanConfig, ScanOutcome};
 use crate::core::speed::{self, SpeedConfig, SpeedOutcome};
 use crate::core::storage::{self, AppPaths};
@@ -28,6 +29,7 @@ pub enum JobKind {
     Pool,
     PoolRebuild,
     Probe,
+    Classify,
 }
 
 impl JobKind {
@@ -41,6 +43,7 @@ impl JobKind {
             JobKind::Pool => "官方候选池",
             JobKind::PoolRebuild => "段池重建",
             JobKind::Probe => "段池粗测",
+            JobKind::Classify => "出口区域划分",
         }
     }
 }
@@ -121,6 +124,8 @@ pub enum JobEvent {
     },
     ProbeWarning(String),
     ProbeDone(ProbeOutcome),
+    ClassifyProgress(region::ClassifyProgress),
+    ClassifyDone(region::ClassifyOutcome),
     UpdateChecked(Result<update::Release, String>),
     UpdateProgress(update::DownloadProgress),
     /// 已下载并校验的安装包内容，或失败原因。
@@ -485,6 +490,37 @@ pub fn spawn_probe(config: ProbeConfig, tx: UnboundedSender<JobEvent>, cancel: A
             }
         ));
         let _ = tx.send(JobEvent::ProbeDone(outcome));
+    });
+}
+
+pub fn spawn_classify(
+    config: ClassifyConfig,
+    tx: UnboundedSender<JobEvent>,
+    cancel: Arc<AtomicBool>,
+) {
+    storage::log_line(&format!(
+        "开始划分出口区域：{} 段，并发 {}",
+        config.segments.len(),
+        config.concurrency
+    ));
+    spawn_guarded(JobKind::Classify, tx.clone(), async move {
+        let progress = tx.clone();
+        let outcome = region::classify(&config, cancel, |step| {
+            let _ = progress.send(JobEvent::ClassifyProgress(step));
+        })
+        .await;
+        storage::log_line(&format!(
+            "出口区域划分{}：{} 段中 {} 段有响应，耗时 {:.1}s",
+            if outcome.stopped {
+                "已停止"
+            } else {
+                "完成"
+            },
+            outcome.segments.len(),
+            outcome.responded,
+            outcome.elapsed.as_secs_f64()
+        ));
+        let _ = tx.send(JobEvent::ClassifyDone(outcome));
     });
 }
 

@@ -1,3 +1,5 @@
+pub mod colo;
+pub mod colo_data;
 pub mod daily;
 pub mod http;
 pub mod ip;
@@ -5,6 +7,7 @@ pub mod model;
 pub mod pool;
 pub mod probe;
 pub mod proxy;
+pub mod region;
 pub mod scan;
 pub mod speed;
 pub mod stats;

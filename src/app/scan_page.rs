@@ -310,7 +310,9 @@ impl AppState {
                 ]))
             });
 
-        let row_count = self.scan_hits.len();
+        let visible = self.scan_visible();
+        let row_count = visible.len();
+        let region_filter = self.render_scan_region_filter(cx);
         let table_body = if row_count == 0 {
             widgets::empty_state(
                 "scan",
@@ -334,8 +336,11 @@ impl AppState {
                 cx.processor(|this: &mut AppState, range: Range<usize>, _window, _cx| {
                     let widths = this.column_widths(TableId::Scan);
                     let mut rows = Vec::with_capacity(range.end - range.start);
+                    let visible = this.scan_visible();
                     for ix in range {
-                        let Some(hit) = this.scan_hits.get(ix) else {
+                        let Some(hit) =
+                            visible.get(ix).and_then(|&index| this.scan_hits.get(index))
+                        else {
                             continue;
                         };
                         rows.push(
@@ -387,7 +392,11 @@ impl AppState {
                                         .flex_shrink_0()
                                         .text_size(px(theme::font::BODY))
                                         .text_color(theme::muted())
-                                        .child(hit.country.clone()),
+                                        .child(if hit.country.is_empty() {
+                                            "-".to_string()
+                                        } else {
+                                            crate::core::colo::country_name(&hit.country)
+                                        }),
                                 )
                                 .child(
                                     div()
@@ -456,6 +465,7 @@ impl AppState {
                             .children(table_actions),
                     ),
             )
+            .children(region_filter)
             .child(
                 div()
                     .flex()

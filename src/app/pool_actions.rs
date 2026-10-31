@@ -36,14 +36,31 @@ impl AppState {
             .update(cx, |input, _| input.set_content(text));
     }
 
-    pub(super) fn next_batch_preview(&self) -> String {
-        let len = self.pool_order.len();
+    /// 下一轮要扫描的段。`follow_lock` 为 true 时按锁定区域的单独轮转（自动优选页），
+    /// 否则按整个段池（段池页管理的就是整个段池的起点）。
+    pub(super) fn next_batch_preview(&self, follow_lock: bool) -> String {
+        let (order, cursor, _, locked) = if follow_lock {
+            self.effective_rotation()
+        } else {
+            (
+                self.pool_order.clone(),
+                self.daily_state.cursor,
+                self.daily_state.round,
+                false,
+            )
+        };
+        let len = order.len();
         if len == 0 {
-            return "段池为空".to_string();
+            return if locked {
+                "段池里没有落在锁定区域的段".to_string()
+            } else {
+                "段池为空".to_string()
+            };
         }
+        let cursor = pool::normalize_cursor(cursor, len);
         let batch = pool::batch_size(self.settings.daily_segments, len);
-        let positions = pool::batch_positions(self.daily_state.cursor, batch, len);
-        let segments = pool::batch_segments(&self.pool_order, self.daily_state.cursor, batch);
+        let positions = pool::batch_positions(cursor, batch, len);
+        let segments = pool::batch_segments(&order, cursor, batch);
         let preview = segments
             .iter()
             .take(3)
@@ -153,7 +170,7 @@ impl AppState {
     ) {
         match self.apply_pool_cursor_inner(cx) {
             Ok(()) => {
-                let preview = self.next_batch_preview();
+                let preview = self.next_batch_preview(false);
                 self.notify_status(format!("起点已更新 · {preview}"), Tone::Green, cx);
             }
             Err(err) => self.fail(err, cx),

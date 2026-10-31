@@ -26,89 +26,13 @@ pub const FALLBACK_RANGES: &[&str] = &[
     "131.0.72.0/22",
 ];
 
-pub const COLO_CC: &[(&str, &str)] = &[
-    ("LAX", "US"),
-    ("SJC", "US"),
-    ("PDX", "US"),
-    ("DFW", "US"),
-    ("SEA", "US"),
-    ("ATL", "US"),
-    ("BOS", "US"),
-    ("LAS", "US"),
-    ("ORD", "US"),
-    ("IAD", "US"),
-    ("MIA", "US"),
-    ("DEN", "US"),
-    ("MSP", "US"),
-    ("PHX", "US"),
-    ("EWR", "US"),
-    ("HKG", "HK"),
-    ("NRT", "JP"),
-    ("KIX", "JP"),
-    ("ICN", "KR"),
-    ("SIN", "SG"),
-    ("TPE", "TW"),
-    ("FRA", "DE"),
-    ("AMS", "NL"),
-    ("LHR", "GB"),
-    ("CDG", "FR"),
-    ("MAD", "ES"),
-    ("ARN", "SE"),
-    ("WAW", "PL"),
-    ("VNO", "LT"),
-    ("HEL", "FI"),
-    ("CPH", "DK"),
-    ("OSL", "NO"),
-    ("SOF", "BG"),
-    ("ZRH", "CH"),
-    ("TXL", "DE"),
-    ("HAM", "DE"),
-    ("DME", "RU"),
-    ("LCA", "CY"),
-    ("KIV", "MD"),
-    ("TBS", "GE"),
-    ("YUL", "CA"),
-    ("YYZ", "CA"),
-    ("SYD", "AU"),
-    ("AKX", "KZ"),
-];
-
-pub const COLO_CITY: &[(&str, &str)] = &[
-    ("DEN", "丹佛"),
-    ("SJC", "圣何塞"),
-    ("LAX", "洛杉矶"),
-    ("PDX", "波特兰"),
-    ("SEA", "西雅图"),
-    ("PHX", "凤凰城"),
-    ("DFW", "达拉斯"),
-    ("ORD", "芝加哥"),
-    ("IAD", "阿什本"),
-    ("HKG", "香港"),
-    ("NRT", "东京"),
-    ("ICN", "首尔"),
-    ("SIN", "新加坡"),
-    ("TPE", "台北"),
-    ("FRA", "法兰克福"),
-    ("AMS", "阿姆斯特丹"),
-    ("LHR", "伦敦"),
-];
-
+/// 机房所在国家 / 地区代码；完整机房表见 `core::colo`。
 pub fn country_for_colo(colo: &str) -> &'static str {
-    let colo = colo.trim().to_ascii_uppercase();
-    COLO_CC
-        .iter()
-        .find(|(code, _)| *code == colo)
-        .map(|(_, cc)| *cc)
-        .unwrap_or("")
+    crate::core::colo::country_code(colo)
 }
 
 pub fn colo_city(colo: &str) -> &'static str {
-    let colo = colo.trim().to_ascii_uppercase();
-    COLO_CITY
-        .iter()
-        .find(|(code, _)| *code == colo)
-        .map(|(_, city)| *city)
-        .unwrap_or("")
+    crate::core::colo::city(colo)
 }
 
 pub fn colo_label(colo: &str) -> String {

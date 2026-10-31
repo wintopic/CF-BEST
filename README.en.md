@@ -42,11 +42,12 @@ Finding fast Cloudflare IPs usually means juggling several scripts: scan, speed-
 | **Scan IP** | Finds reachable Cloudflare addresses in CIDRs, single IPs, ASN prefixes or suggested ranges, with colo and handshake latency |
 | **Speed ranking** | Sequential download tests (quick screen and multi-round fine test), ranked by median speed, with a speed histogram and a latency/speed scatter plot |
 | **Availability check** | Full tunnel check through VLESS + WebSocket subscription nodes (`vless://` links or a Clash profile), or a basic TLS check without nodes; passing IPs import into your proxy client in one click |
-| **Range pool** (advanced) | Pick a pool strategy (balanced rotation, network-ranked, sequential), move the start point, and probe how each range performs on your network |
+| **Range pool** (advanced) | Pick a pool strategy (balanced rotation, network-ranked, sequential), move the start point, probe how each range performs on your network, and classify each range's exit region |
 | **History** (advanced) | Past runs, plus a Top 10 rank and speed comparison between the last two speed tests |
 
 Also included:
 
+- 🌏 **Lock the exit region.** Each range in the pool is classified by the Cloudflare colo it actually lands on from your network (Hong Kong, Japan, the US…). With a lock set, auto-optimize only scans ranges in those regions and only keeps IPs that exit there; colo codes such as `SJC` or `NRT` lock more precisely. Result tables show the colo, city and country, and scan results can be filtered by region before the speed test. Cloudflare addresses are anycast, so the same range lands on different colos from different networks: the classification is measured locally, not looked up in GeoIP. In the headless build it's in the web UI, and `cfbest-cli --region HK,JP` sets it for one run.
 - 🔗 **One-click next step.** *Next: speed test* and *Next: verify* load the results and start the next step.
 - 💾 **Results survive restarts.** The latest scan, speed test and verification results come back on launch.
 - 📋 **Copy and export.** Click a row to copy `IP:port`, copy the whole Top N at once, and export TXT or CSV (opens in Excel).

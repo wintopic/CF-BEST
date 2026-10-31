@@ -139,7 +139,16 @@ impl AppState {
         let order_len = self.pool_order.len();
         let cursor = pool::normalize_cursor(self.daily_state.cursor, order_len);
         let batch = pool::batch_size(self.settings.daily_segments, order_len);
-        let preview = self.next_batch_preview();
+        let preview = self.next_batch_preview(false);
+        let (locked_order, locked_cursor, _, locked) = self.effective_rotation();
+        let lock_note = locked.then(|| {
+            format!(
+                "已锁定出口区域 {}：自动优选在落在该区域的 {} 段中单独轮转（下一轮从其中第 {} 段开始）；这里的起点与预览只用于不锁定时。",
+                crate::core::region::RegionLock::parse(&self.settings.region_lock).label(),
+                locked_order.len(),
+                pool::normalize_cursor(locked_cursor, locked_order.len()) + 1
+            )
+        });
         let strategy = self.pool_strategy();
         let busy = self.busy();
         let probe_running = self.job == Some(JobKind::Probe);
@@ -286,6 +295,7 @@ impl AppState {
                             .child(preview),
                     ),
             )
+            .children(lock_note.map(widgets::hint))
             .child(
                 div()
                     .flex()
@@ -642,6 +652,7 @@ impl AppState {
             .gap_4()
             .w_full()
             .child(overview)
+            .child(self.render_region_card(cx))
             .child(probe)
             .child(order_card)
     }

@@ -47,13 +47,14 @@ impl AppState {
             "无需订阅即可优选 IP；测速后只做 TLS 基础验证，结果不代表代理节点可用。"
         };
         let strategy = pool::normalize_strategy(&self.settings.pool_strategy);
-        let cursor = pool::normalize_cursor(self.daily_state.cursor, self.pool_order.len());
-        let cursor_label = if self.pool_order.is_empty() {
+        let (rotation, cursor, round, locked) = self.effective_rotation();
+        let cursor = pool::normalize_cursor(cursor, rotation.len());
+        let cursor_label = if rotation.is_empty() {
             "起点 —".to_string()
         } else {
             format!("起点第 {} 段", cursor + 1)
         };
-        let preview = self.next_batch_preview();
+        let preview = self.next_batch_preview(true);
         let reset_armed = self
             .reset_armed_at
             .map(|at| at.elapsed() < std::time::Duration::from_secs(5))
@@ -61,6 +62,9 @@ impl AppState {
         let auto = self.settings.auto_daily;
         let launch_at_login = self.settings.launch_at_login;
         let restore_params = self.restore_params_button(ParamGroup::Daily, cx);
+        // 简洁模式与高级模式各显示一份（同一时间只渲染其中一张卡片）。
+        let region_lock_simple = self.render_region_lock(cx);
+        let region_lock_config = self.render_region_lock(cx);
         let status = if running {
             ("运行中", Tone::Accent)
         } else if self.daily_stage == "完成" || !self.daily_top_rows.is_empty() {
@@ -226,6 +230,7 @@ impl AppState {
                     .child(widgets::hint(run_hint)),
             )
             .child(widgets::hint(verification_hint))
+            .child(region_lock_simple)
             .children(make_summary_stats(&summary, running))
             .child(
                 div()
@@ -270,14 +275,18 @@ impl AppState {
                     .gap_2()
                     .text_size(px(theme::font::SMALL))
                     .text_color(theme::faint())
-                    .child(format!("段池 {} 段", self.daily_state.pool_count))
+                    .child(if locked {
+                        format!("锁定区域 {} 段", rotation.len())
+                    } else {
+                        format!("段池 {} 段", self.daily_state.pool_count)
+                    })
                     .child(div().size(px(3.)).rounded(px(2.)).bg(theme::faint()))
                     .child(format!(
                         "{} · {cursor_label}",
                         pool::strategy_label(strategy)
                     ))
                     .child(div().size(px(3.)).rounded(px(2.)).bg(theme::faint()))
-                    .child(format!("第 {} 轮", self.daily_state.round.max(1)))
+                    .child(format!("第 {round} 轮"))
                     .child(div().size(px(3.)).rounded(px(2.)).bg(theme::faint()))
                     .child(if self.daily_state.last_run.is_empty() {
                         "尚未完成过".to_string()
@@ -311,6 +320,7 @@ impl AppState {
                     .child(widgets::field("Top N", self.daily_top.clone()))
                     .child(widgets::field("扫描并发", self.daily_concurrency.clone())),
             )
+            .child(region_lock_config)
             .child(
                 div()
                     .flex()
@@ -394,24 +404,24 @@ impl AppState {
                             .flex_wrap()
                             .gap_5()
                             .child(widgets::stat(
-                                "段池",
-                                self.daily_state.pool_count.to_string(),
+                                if locked { "锁定区域" } else { "段池" },
+                                if locked {
+                                    format!("{} / {}", rotation.len(), self.pool_order.len())
+                                } else {
+                                    self.daily_state.pool_count.to_string()
+                                },
                                 Tone::Blue,
                             ))
                             .child(widgets::stat(
                                 "当前起点",
-                                if self.pool_order.is_empty() {
+                                if rotation.is_empty() {
                                     "—".to_string()
                                 } else {
                                     (cursor + 1).to_string()
                                 },
                                 Tone::Muted,
                             ))
-                            .child(widgets::stat(
-                                "轮次",
-                                self.daily_state.round.max(1).to_string(),
-                                Tone::Accent,
-                            )),
+                            .child(widgets::stat("轮次", round.to_string(), Tone::Accent)),
                     )
                     .child(
                         div()
@@ -543,7 +553,7 @@ impl AppState {
 
         let columns: [(&'static str, f32); 5] = [
             ("IP", 220.),
-            ("机房", 100.),
+            ("机房", 180.),
             ("最高速度", 130.),
             ("平均速度", 110.),
             ("握手延迟", 110.),
@@ -599,12 +609,26 @@ impl AppState {
                         )
                         .child(
                             div()
-                                .w(px(100.))
+                                .w(px(180.))
                                 .flex_shrink_0()
-                                .font_family(theme::FONT_MONO)
-                                .text_size(px(theme::font::BODY))
-                                .text_color(theme::green())
-                                .child(entry.colo.clone()),
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_MONO)
+                                        .text_size(px(theme::font::BODY))
+                                        .text_color(theme::green())
+                                        .child(entry.colo.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(theme::font::SMALL))
+                                        .text_color(theme::muted())
+                                        .child(crate::core::colo::place(&entry.colo)),
+                                ),
                         )
                         .child(
                             div()

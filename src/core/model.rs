@@ -167,6 +167,12 @@ pub struct DailyState {
     pub last_run: String,
     pub last_top: Vec<DailyEntry>,
     pub pool_count: usize,
+    /// 锁定出口区域时按锁定区域单独轮转：`region_key` 为锁定内容，换了锁定就从头开始。
+    pub region_key: String,
+    pub region_cursor: usize,
+    pub region_round: u32,
+    /// 锁定区域内的段数。
+    pub region_count: usize,
 }
 
 impl Default for DailyState {
@@ -178,6 +184,10 @@ impl Default for DailyState {
             last_run: String::new(),
             last_top: Vec::new(),
             pool_count: 0,
+            region_key: String::new(),
+            region_cursor: 0,
+            region_round: 1,
+            region_count: 0,
         }
     }
 }
@@ -289,6 +299,8 @@ pub struct Settings {
     pub proxy_feed_token: String,
     /// 启动时与每天自动检查一次新版本（只向 GitHub 请求最新版本信息，不上传任何数据）。
     pub update_check: bool,
+    /// 锁定的出口区域：国家 / 地区代码（HK）或机房代码（SJC），为空表示不锁定。
+    pub region_lock: Vec<String>,
 }
 
 impl Default for Settings {
@@ -328,6 +340,7 @@ impl Default for Settings {
             proxy_feed_port: 0,
             proxy_feed_token: String::new(),
             update_check: true,
+            region_lock: Vec::new(),
         }
     }
 }
@@ -402,6 +415,26 @@ pub struct SegmentScore {
     pub avg_latency_ms: f64,
     pub mbps: Option<f64>,
     pub score: f64,
+}
+
+/// 段池中各 /24 段在本机网络下落到的机房（出口区域划分），见 `core::region`。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SegmentRegions {
+    /// 最近一次完整划分完成的时间。
+    pub classified: String,
+    pub records: Vec<SegmentRegion>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SegmentRegion {
+    pub segment: String,
+    /// 各机房的命中次数，多的在前；为空表示探测过但没有响应。
+    pub colos: Vec<(String, u32)>,
+    /// 完整探测过的地址数；0 表示只从零散的扫描结果中学到，还没有专门划分过。
+    pub probed: u32,
+    pub updated: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

@@ -26,6 +26,16 @@ impl AppState {
                 }
             }
             JobEvent::ScanDone(outcome) => {
+                // 手动扫描的命中也记下所在段落到的机房，补充出口区域划分。
+                if !outcome.hits.is_empty() {
+                    let mut regions = storage::load_segment_regions(&self.paths);
+                    regions.learn(
+                        &outcome.hits,
+                        &Local::now().format("%Y-%m-%d %H:%M").to_string(),
+                    );
+                    storage::save_segment_regions(&self.paths, &regions);
+                    self.refresh_regions();
+                }
                 self.scan_hits = outcome.hits;
                 self.scan_progress.done = outcome.done;
                 self.scan_progress.total = outcome.total;
@@ -261,6 +271,8 @@ impl AppState {
                     self.pool_segments = loaded_pool;
                     self.rebuild_pool_order();
                 }
+                // 优选会生成段池、首次锁定时划分区域、更新扫描过的段。
+                self.refresh_regions();
                 self.sync_pool_cursor_input(cx);
                 self.daily_top_rows = result.top;
                 self.daily_summary = Some(result.summary.clone());
@@ -466,6 +478,58 @@ impl AppState {
                 );
                 self.probe_detail = message.clone();
                 self.probe_progress.label = message.clone();
+                self.notify_status(
+                    message,
+                    if outcome.stopped {
+                        Tone::Amber
+                    } else {
+                        Tone::Green
+                    },
+                    cx,
+                );
+            }
+            JobEvent::ClassifyProgress(step) => {
+                self.classify_progress = ProgressState {
+                    done: step.probed,
+                    total: step.total,
+                    label: format!("已划分 {} / {} 段", step.resolved, step.segments),
+                };
+                self.classify_detail = format!(
+                    "已探测 {} 个地址 · 已划分 {} / {} 段",
+                    step.probed, step.resolved, step.segments
+                );
+            }
+            JobEvent::ClassifyDone(outcome) => {
+                let now = Local::now().format("%Y-%m-%d %H:%M").to_string();
+                let mut regions = storage::load_segment_regions(&self.paths);
+                crate::core::region::apply_classification(&mut regions, &outcome, &now);
+                storage::save_segment_regions(&self.paths, &regions);
+                self.refresh_regions();
+                let spread = self
+                    .region_countries
+                    .iter()
+                    .take(5)
+                    .map(|country| format!("{} {} 段", country.name, country.segments))
+                    .collect::<Vec<_>>()
+                    .join("、");
+                let message = format!(
+                    "出口区域划分{}：{} 段中 {} 段有响应，用时 {:.0}s{}",
+                    if outcome.stopped {
+                        "已停止"
+                    } else {
+                        "完成"
+                    },
+                    outcome.segments.len(),
+                    outcome.responded,
+                    outcome.elapsed.as_secs_f64(),
+                    if spread.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {spread}")
+                    }
+                );
+                self.classify_progress.done = self.classify_progress.total;
+                self.classify_detail = message.clone();
                 self.notify_status(
                     message,
                     if outcome.stopped {

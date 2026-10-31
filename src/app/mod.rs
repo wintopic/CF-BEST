@@ -6,6 +6,7 @@ mod history_page;
 mod pool_actions;
 mod pool_page;
 mod proxy_import;
+mod region_lock;
 mod scan_page;
 mod sidebar;
 mod speed_page;
@@ -267,6 +268,15 @@ pub struct AppState {
     pool_order: Vec<String>,
     score_map: HashMap<String, f64>,
     segment_scores: SegmentScores,
+    /// 段池各段的出口区域划分（`segment_regions.json`）与按国家 / 地区的统计。
+    segment_regions: crate::core::model::SegmentRegions,
+    region_countries: Vec<crate::core::region::CountryCount>,
+    /// 锁定出口区域：标签之外的国家 / 地区或机房代码。
+    region_extra: Entity<TextInput>,
+    classify_progress: ProgressState,
+    classify_detail: String,
+    /// 扫描结果按国家 / 地区筛选（国家代码）；None 显示全部。
+    scan_region: Option<String>,
     pool_cursor: Entity<TextInput>,
     probe_samples: Entity<TextInput>,
     probe_concurrency: Entity<TextInput>,
@@ -375,6 +385,21 @@ impl AppState {
             "待验证的 IP，每行一条（留空则验证已拉取的订阅节点）",
         );
 
+        let segment_regions = storage::load_segment_regions(&paths);
+        let region_countries = segment_regions.countries(&pool_segments);
+        let region_extra = {
+            let known: Vec<&str> = region_countries
+                .iter()
+                .map(|country| country.code.as_str())
+                .collect();
+            let extra: Vec<&str> = settings
+                .region_lock
+                .iter()
+                .map(String::as_str)
+                .filter(|code| !known.contains(code))
+                .collect();
+            text_input(cx, extra.join(", "), "例如 SG, NRT, SJC")
+        };
         let daily_segments = text_input(cx, settings.daily_segments.to_string(), "20");
         let daily_test = text_input(cx, settings.daily_test.to_string(), "20");
         let daily_top = text_input(cx, settings.daily_top.to_string(), "5");
@@ -522,6 +547,16 @@ impl AppState {
             pool_order,
             score_map,
             segment_scores: segment_scores.clone(),
+            classify_detail: if segment_regions.classified.is_empty() {
+                String::new()
+            } else {
+                format!("上次划分 {}", segment_regions.classified)
+            },
+            segment_regions,
+            region_countries,
+            region_extra,
+            classify_progress: ProgressState::default(),
+            scan_region: None,
             pool_cursor,
             probe_samples,
             probe_concurrency,

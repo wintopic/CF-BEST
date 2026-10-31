@@ -1,6 +1,6 @@
 [package]
 name = "cf-best"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.96"
 description = "Cloudflare 优选 IP 桌面工作台：扫描、测速、可用性验证与每日自动优选"

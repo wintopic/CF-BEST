@@ -75,6 +75,7 @@ impl AppState {
         self.save_settings();
 
         self.scan_hits.clear();
+        self.scan_region = None;
         self.scan_progress = ProgressState {
             done: 0,
             total: targets.len(),
@@ -139,7 +140,12 @@ impl AppState {
     /// 把握手最快的扫描结果填入测速候选，返回填入数量。
     fn fill_speed_from_scan(&mut self, cx: &mut Context<Self>) -> usize {
         let limit = if self.settings.advanced_mode { 100 } else { 20 };
-        let mut sorted = self.scan_hits.clone();
+        // 筛选了出口区域时只送筛选出的地址。
+        let mut sorted: Vec<_> = self
+            .scan_visible()
+            .into_iter()
+            .map(|index| self.scan_hits[index].clone())
+            .collect();
         sorted.sort_by(|a, b| a.latency_ms.total_cmp(&b.latency_ms));
         let selected: Vec<String> = sorted
             .iter()
@@ -680,6 +686,7 @@ impl AppState {
             )
         };
         let node = self.sync_verify_node();
+        self.commit_region_lock(cx);
         let scan_timeout = self.settings.scan_timeout_secs.clamp(1.0, 30.0);
         self.settings.daily_segments = segments;
         self.settings.daily_test = test;
@@ -711,6 +718,7 @@ impl AppState {
             node,
             strategy: self.settings.pool_strategy.clone(),
             scores: self.segment_scores.records.clone(),
+            region_lock: crate::core::region::RegionLock::parse(&self.settings.region_lock),
         };
         crate::jobs::spawn_daily(config, self.events_tx.clone(), cancel);
         self.notify_status(

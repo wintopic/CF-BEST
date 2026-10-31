@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use core::daily::{self, DailyConfig, DailyEvent};
 use core::model::{DailyEntry, DailyVerification, Settings, VlessNode};
+use core::region::RegionLock;
 use core::storage::{self, AppPaths};
 use core::verify;
 
@@ -35,6 +36,8 @@ cfbest-cli — CF Best 的无窗口模式（与图形界面共用配置与段池
   --test <N>          进入测速的 IP 数（默认取设置）
   --top <N>           最终保留的 Top N（默认取设置）
   --concurrency <N>   扫描并发（默认取设置）
+  --region <列表>     锁定出口区域：国家 / 地区代码或机房代码，逗号分隔，如 HK,JP,SJC；
+                      all 表示不锁定（默认取设置）
   --out <PATH>        把结果另存到指定文件
   --json              以 JSON 输出到标准输出
   --quiet             不打印过程日志
@@ -54,6 +57,7 @@ struct Args {
     test: Option<usize>,
     top: Option<usize>,
     concurrency: Option<usize>,
+    region: Option<String>,
     out: Option<PathBuf>,
     json: bool,
     quiet: bool,
@@ -97,6 +101,7 @@ impl Args {
                 "--concurrency" => {
                     args.concurrency = Some(take_number(&mut argv, "--concurrency", inline)?);
                 }
+                "--region" => args.region = Some(take_value(&mut argv, "--region", inline)?),
                 "--out" => {
                     args.out = Some(PathBuf::from(take_value(&mut argv, "--out", inline)?));
                 }
@@ -290,6 +295,11 @@ async fn run(paths: &AppPaths, settings: &Settings, args: &Args) -> anyhow::Resu
         node,
         strategy: settings.pool_strategy.clone(),
         scores: storage::load_segment_scores(paths).records,
+        region_lock: match args.region.as_deref().map(str::trim) {
+            Some(text) if text.eq_ignore_ascii_case("all") => RegionLock::default(),
+            Some(text) => RegionLock::parse_text(text),
+            None => RegionLock::parse(&settings.region_lock),
+        },
     };
 
     let quiet = args.quiet;
@@ -365,13 +375,14 @@ fn render_text(entries: &[DailyEntry]) -> String {
     let mut out = format!("# Top {}\n", entries.len());
     for entry in entries {
         out.push_str(&format!(
-            "{}:{}#{}\t{:.1}Mbps\t{:.0}ms\t{}\n",
+            "{}:{}#{}\t{:.1}Mbps\t{:.0}ms\t{}\t{}\n",
             entry.ip,
             entry.port,
             entry.colo,
             entry.best_mbps,
             entry.latency_ms,
             verification_label(&entry.verification),
+            core::colo::place(&entry.colo),
         ));
     }
     out
